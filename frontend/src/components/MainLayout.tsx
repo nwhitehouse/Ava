@@ -3,7 +3,8 @@ import { Link, Outlet } from 'react-router-dom';
 import { VscMenu, VscMail, VscArrowUp } from "react-icons/vsc"; // Using VSC icons for now
 import { FiChevronLeft } from "react-icons/fi"; // Icon for logo
 import ChatOverlay from './ChatOverlay'; // Import the overlay
-import { AnimatePresence } from 'framer-motion'; // Import AnimatePresence
+import { AnimatePresence, motion } from 'framer-motion'; // Import AnimatePresence and motion
+import EmailIngestionForm from './EmailIngestionForm'; // Import the ingestion form
 
 // --- Interfaces --- //
 
@@ -33,11 +34,13 @@ const MainLayout: React.FC = () => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [chatHistory, setChatHistory] = useState<Message[]>([]);
     const [isChatOpen, setIsChatOpen] = useState(false); // State for overlay visibility
+    const [currentView, setCurrentView] = useState<'chat' | 'ingest'>('chat'); // State for main view
+    const [isMenuOpen, setIsMenuOpen] = useState(false); // State for hamburger menu dropdown
+    const menuRef = useRef<HTMLDivElement>(null); // Ref for detecting clicks outside menu
 
     // Function to close chat and clean up any connections (SSE ref removed)
     const closeChat = useCallback(() => {
         setIsChatOpen(false);
-        // No eventSourceRef cleanup needed anymore
         setIsSubmitting(false); // Ensure submitting state is reset
     }, []);
 
@@ -114,32 +117,91 @@ const MainLayout: React.FC = () => {
         setIsChatOpen(true);
     };
 
+    // --- Menu Handling --- 
+    const toggleMenu = () => {
+        setIsMenuOpen(!isMenuOpen);
+    };
+
+    // Close menu if clicked outside
+    useEffect(() => {
+        function handleClickOutside(event: MouseEvent) {
+            if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+                setIsMenuOpen(false);
+            }
+        }
+        document.addEventListener("mousedown", handleClickOutside);
+        return () => {
+            document.removeEventListener("mousedown", handleClickOutside);
+        };
+    }, [menuRef]);
+
+    const handleIngestClick = () => {
+        setCurrentView('ingest');
+        setIsMenuOpen(false); // Close menu after selection
+    };
+    // --- End Menu Handling ---
+
     return (
         <div className="flex flex-col h-screen bg-white text-gray-800">
             {/* Top Navigation Bar - removed shadow, adjusted padding */}
-            <nav className="bg-white p-4 flex justify-between items-center sticky top-0 z-10 border-b border-gray-200">
-                {/* Logo - Using chevron left rotated */}
-                <Link to="/" className="text-blue-600 text-3xl transform -rotate-90">
+            <nav className="bg-white p-4 flex justify-between items-center sticky top-0 z-30 border-b border-gray-200"> {/* Increased z-index slightly */}
+                {/* Logo - Sets view back to 'chat' */}
+                <button 
+                    onClick={() => setCurrentView('chat')} 
+                    className="text-blue-600 text-3xl transform -rotate-90 focus:outline-none p-1" // Added padding
+                    aria-label="Go to main chat view"
+                >
                     <FiChevronLeft />
-                </Link>
+                </button>
                 <div className="flex items-center space-x-4">
                     {/* Mail Icon - Link to /emails */}
-                    <Link to="/emails" className="text-gray-600 hover:text-blue-600 relative">
+                    <Link to="/emails" className="text-gray-600 hover:text-blue-600 relative p-1">
                         <VscMail size={24} />
                         {showNotification && (
                             <span className="absolute top-0 right-0 block h-2 w-2 rounded-full ring-1 ring-white bg-red-500"></span>
                         )}
                     </Link>
-                    {/* Menu Icon - adjusted color */}
-                    <button className="text-gray-600 hover:text-blue-600">
-                        <VscMenu size={24} />
-                    </button>
+                    {/* Hamburger Menu Icon & Dropdown */}
+                    <div className="relative" ref={menuRef}>
+                        <button 
+                            onClick={toggleMenu} 
+                            className="text-gray-600 hover:text-blue-600 focus:outline-none p-1" // Added padding
+                            aria-label="Open menu"
+                            aria-expanded={isMenuOpen}
+                        >
+                            <VscMenu size={24} />
+                        </button>
+                        <AnimatePresence>
+                            {isMenuOpen && (
+                                <motion.div 
+                                    initial={{ opacity: 0, y: -10 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -10 }}
+                                    transition={{ duration: 0.15 }}
+                                    className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg py-1 z-40 border border-gray-200" // Ensure menu is above content
+                                >
+                                    <button
+                                        onClick={handleIngestClick}
+                                        className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 focus:outline-none focus:bg-gray-100"
+                                    >
+                                        Ingest Emails
+                                    </button>
+                                    {/* Add other menu items here if needed */}
+                                    {/* <Link to="/settings" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Settings</Link> */}
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </div>
                 </div>
             </nav>
 
-            {/* Main Content Area */}
-            <main className="flex-grow overflow-y-auto p-6">
-                <Outlet />
+            {/* Main Content Area - Conditional Rendering */}
+            <main className="flex-grow overflow-y-auto p-4 sm:p-6">
+                {currentView === 'ingest' ? (
+                    <EmailIngestionForm />
+                ) : (
+                    <Outlet /> // Render the default route content (e.g., HomeScreen)
+                )}
             </main>
 
             {/* Chat Overlay - Wrap in AnimatePresence */}

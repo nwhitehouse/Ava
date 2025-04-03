@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 import weaviate.classes as wvc
 import json
 import time # For caching
+from datetime import datetime, timezone
+import re # Import regex for parsing
 
 # Import the RAG chains and Weaviate client
 # Correctly import the global weaviate_client variable
@@ -59,6 +61,92 @@ class EmailRef(BaseModel):
 class ChatRagResponse(BaseModel):
     answer_text: str
     references: list[EmailRef]
+
+# Removed IngestEmailRequest
+# Pydantic model for bulk email ingestion
+class BulkIngestRequest(BaseModel):
+    raw_text: str
+
+# --- Utility Functions for Parsing --- #
+def parse_bulk_emails(raw_text: str) -> list[dict]:
+    """Parses raw text containing multiple emails into a list of dicts,
+       expecting separation by # Email [number] and markdown headers.
+    """
+    emails = []
+    # Split emails based on the specific pattern "# Email \d+"
+    email_chunks = re.split(r'^# Email \d+\s*$\n', raw_text.strip(), flags=re.MULTILINE)
+    
+    email_chunks = [chunk.strip() for chunk in email_chunks if chunk.strip()] # Remove empty leading/trailing chunks
+
+    print(f"--- Found {len(email_chunks)} potential email chunks after splitting by '# Email ...' ---")
+
+    for i, chunk in enumerate(email_chunks):
+        email_data = {
+            "sender": "Unknown Sender",
+            "subject": "No Subject",
+            "body": chunk, # Default body is the whole chunk initially
+            "received_date": datetime.now(timezone.utc).isoformat() # Default date
+        }
+
+        lines = chunk.split('\n')
+        body_start_line_index = 0
+        headers_parsed_count = 0 # Count how many headers we found for better body detection
+
+        for idx, line in enumerate(lines):
+            line_strip = line.strip()
+            line_lower = line_strip.lower()
+            match_found = False
+
+            # Look for markdown bold headers
+            if line_lower.startswith('**from:**'):
+                # Extract content after **From:**, removing potential trailing **
+                sender_raw = line_strip[len('**From:**'):].strip()
+                if sender_raw.endswith('**'): sender_raw = sender_raw[:-2].strip()
+                email_data["sender"] = sender_raw
+                match_found = True
+            elif line_lower.startswith('**to:**'): # Ignore To
+                match_found = True
+                pass
+            elif line_lower.startswith('**subject:**'):
+                subject_raw = line_strip[len('**Subject:**'):].strip()
+                if subject_raw.endswith('**'): subject_raw = subject_raw[:-2].strip()
+                email_data["subject"] = subject_raw
+                match_found = True
+            elif line_lower.startswith('**date:**'):
+                date_raw = line_strip[len('**Date:**'):].strip()
+                if date_raw.endswith('**'): date_raw = date_raw[:-2].strip()
+                email_data["received_date"] = date_raw # Store raw date string
+                match_found = True
+
+            if match_found:
+                headers_parsed_count += 1
+                body_start_line_index = idx + 1 # Potential body starts after this line
+            elif headers_parsed_count > 0 and not line.strip():
+                # If we've found at least one header and hit a blank line, 
+                # assume body starts definitively after this blank line.
+                body_start_line_index = idx + 1
+                break # Stop header scanning
+            elif headers_parsed_count == 0 and idx > 5: 
+                 # If we haven't found any headers after several lines, assume it's all body
+                 body_start_line_index = 0
+                 break
+            elif headers_parsed_count > 0 and idx >= body_start_line_index : 
+                # If we have found headers, and this line is not blank and not a header 
+                # then the body must have started at body_start_line_index, stop scanning
+                break
+
+        # Extract the body based on where headers likely ended
+        body_lines = lines[body_start_line_index:]
+        email_data["body"] = '\n'.join(body_lines).strip()
+
+        # Add only if we have a plausible body
+        if email_data["body"]:
+            emails.append(email_data)
+            print(f"  Parsed Email Chunk {i+1}: Sender='{email_data['sender']}', Subject='{email_data['subject'][:30]}...', Date='{email_data['received_date']}'")
+        else:
+             print(f"  Skipped Email Chunk {i+1}: Could not extract a valid body after headers (or no headers found).")
+
+    return emails
 
 # Async context manager for lifespan events
 @asynccontextmanager
@@ -248,6 +336,79 @@ async def get_email_details(email_id: str):
     except Exception as e:
         print(f"Error fetching email details for ID {email_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching email details: {str(e)}")
+
+# --- Delete Single Email Endpoint ---
+@app.delete("/api/email/{email_id}")
+async def delete_single_email(email_id: str):
+    """Deletes a single email by its Weaviate UUID."""
+    if not weaviate_client or not weaviate_client.is_connected():
+        raise HTTPException(status_code=503, detail="Database service not available")
+
+    try:
+        print(f"--- Attempting to DELETE email with ID: {email_id} ---")
+        email_collection = weaviate_client.collections.get(WEAVIATE_CLASS_NAME)
+        
+        # Attempt to delete the object by UUID
+        # The `delete_object_by_id` method doesn't typically raise an error if the ID doesn't exist,
+        # it just does nothing. We can optionally check existence first if needed.
+        email_collection.data.delete_by_id(uuid=email_id)
+        
+        # We can't easily confirm deletion without querying again, so assume success if no error
+        print(f"Successfully requested deletion for email ID: {email_id} (if it existed).")
+        
+        return {"message": f"Email with ID {email_id} deleted successfully (if it existed)."}
+
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] Failed to delete email ID {email_id}: {e}")
+        traceback.print_exc()
+        # Return 500 for unexpected errors during deletion attempt
+        raise HTTPException(status_code=500, detail=f"Failed to delete email: {str(e)}")
+
+# --- Ingest Bulk Emails Endpoint --- 
+@app.post("/api/ingest_bulk_emails")
+async def ingest_bulk_emails(request: BulkIngestRequest):
+    """Receives raw text, parses it into emails, and ingests them into Weaviate."""
+    if not weaviate_client or not weaviate_client.is_connected():
+        raise HTTPException(status_code=503, detail="Database service not available")
+
+    if not request.raw_text.strip():
+        raise HTTPException(status_code=400, detail="Raw text cannot be empty")
+
+    try:
+        print(f"--- Received bulk text for ingestion (length: {len(request.raw_text)}) ---")
+        
+        # Parse the raw text into individual email data dictionaries
+        parsed_emails = parse_bulk_emails(request.raw_text)
+        
+        if not parsed_emails:
+            return {"message": "No valid emails found to ingest in the provided text.", "count": 0}
+
+        print(f"--- Attempting to ingest {len(parsed_emails)} parsed emails via insert_many --- ")
+        email_collection = weaviate_client.collections.get(WEAVIATE_CLASS_NAME)
+        
+        # Use insert_many for efficiency
+        result = email_collection.data.insert_many(parsed_emails)
+        
+        ingested_count = len(result.uuids)
+        error_count = 0
+        if hasattr(result, 'errors') and result.errors:
+            error_count = len(result.errors)
+            print(f"[WARN] Encountered {error_count} errors during bulk ingestion.")
+        elif hasattr(result, 'has_errors') and result.has_errors:
+             print("[WARN] Some unspecified errors occurred during ingestion.")
+             error_count = len(parsed_emails) - ingested_count # Estimate error count
+
+        final_message = f"Ingestion complete. Successfully ingested: {ingested_count}. Failed: {error_count}."
+        print(f"--- {final_message} --- ")
+        
+        return {"message": final_message, "count": ingested_count}
+
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] Failed during bulk email ingestion process: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to ingest emails: {str(e)}")
 
 # --- Get All Emails Endpoint ---
 @app.get("/api/emails", response_model=AllEmailsResponse)
