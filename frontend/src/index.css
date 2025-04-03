@@ -1,0 +1,35 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Keep existing :root styles for base font settings */
+:root {
+  /* font-family is set in tailwind.config.js */
+  line-height: 1.5;
+  font-weight: 400;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Remove default styles - Tailwind handles these */
+/*
+a {
+  ...
+}
+h1 {
+  ...
+}
+button {
+ ...
+}
+@media ... {
+ ...
+}*/
+
+/* Add any custom base styles below if needed */
+body {
+  /* Base colors are applied in MainLayout */
+}
