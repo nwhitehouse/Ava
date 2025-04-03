@@ -10,9 +10,12 @@ from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_weaviate.vectorstores import WeaviateVectorStore
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
-from langchain_core.runnables import RunnablePassthrough, RunnableParallel, RunnableLambda
+from langchain_core.runnables import RunnablePassthrough, RunnableParallel, RunnableLambda, RunnableConfig
 from langchain_core.documents import Document # For type hinting
 from pydantic import BaseModel, Field # For structured output
+
+# Import settings utilities from the new file
+from settings_utils import load_settings, UserSettings 
 
 # Load environment variables (from backend/.env or .env)
 load_dotenv()
@@ -226,198 +229,159 @@ def fetch_emails_native(input_passthrough: dict):
         return []
 
 def create_homescreen_chain_native(llm):
-    """Creates a chain using native Weaviate fetch for homescreen categorization."""
+    """Creates a chain using native Weaviate fetch for homescreen categorization,
+       incorporating user settings dynamically on each run.
+    """
     parser = JsonOutputParser(pydantic_object=HomescreenData)
 
-    prompt_template = """ 
-    You are an AI assistant...
-    Analyze the following emails, identified by their ID, sender, subject, and body.
-    Categorize them according to...
-    Provide your output *only* as a JSON object...
-    **IT IS ABSOLUTELY CRITICAL that for each email... include its correct 'id' (UUID). Copy the ID exactly...**
+    # Settings are now loaded dynamically within the chain
+    # try:
+    #     current_settings = load_settings()
+    #     ...
+    # except Exception as e:
+    #     ...
+    #     current_settings = UserSettings()
+
+    # Prompt now expects settings as input variables
+    prompt_template = f""" 
+    You are an AI assistant helping prioritize and categorize emails for a user based on the provided context and their preferences.
+    Analyze the emails below (identified by ID, sender, subject, body). 
+    Categorize them into 'urgent' (needs user response), 'delegate' (can be delegated), and 'waiting_on' (user is waiting for info).
+
+    User Preferences:
+    - Defines URGENT emails as: {{urgent_context}}
+    - Defines DELEGATABLE emails/tasks as: {{delegate_context}}
+    
+    Provide your output *only* as a JSON object conforming to the schema below. For each email, include its exact 'id' (UUID).
     Schema:
-    {format_instructions}
+    {{format_instructions}}
 
-    Context:
-    {context}
+    Email Context:
+    {{context}}
 
-    Based *only* on the context provided, identify...
-    If no emails fit a category... return an empty list...
+    Based *only* on the Email Context and User Preferences, identify emails for each category.
+    If no emails fit a category, return an empty list for that category.
     Output *only* the JSON object.
-    """ # (Truncated prompt from previous step for brevity)
-
+    """ 
+    
     prompt = ChatPromptTemplate.from_template(
         prompt_template,
-        partial_variables={"format_instructions": parser.get_format_instructions()})
+        # Corrected AGAIN: Use single braces for the dictionary
+        partial_variables={"format_instructions": parser.get_format_instructions()} 
+    )
 
-    # Chain: Fetch Native (limit 20) -> Format Native -> Structure for Prompt -> Prompt -> LLM -> Parse JSON
+    def load_and_prepare_prompt_input(inputs: dict) -> dict:
+        """Loads settings and combines with formatted context for the prompt."""
+        formatted_context = inputs.get("formatted_context", "")
+        try:
+            settings = load_settings()
+            print("--- Dynamically loaded settings for homescreen request ---")
+        except Exception as e:
+            print(f"[WARN] Failed to load settings dynamically: {e}. Using defaults.")
+            settings = UserSettings()
+            
+        # Provide defaults if settings text is empty
+        urgent_ctx = settings.urgent_context if settings.urgent_context else 'Not specified - use general urgency cues.'
+        delegate_ctx = settings.delegate_context if settings.delegate_context else 'Not specified - use general delegation cues.'
+        
+        return {
+            "context": formatted_context,
+            "urgent_context": urgent_ctx,
+            "delegate_context": delegate_ctx
+        }
+
+    # Chain: Fetch -> Format Emails -> Load Settings & Prepare Prompt Input -> Prompt -> LLM -> Parse JSON
     homescreen_chain = (
-        # This RunnableLambda ignores input and calls fetch_emails_native directly
-        RunnableLambda(lambda _: fetch_emails_native({"limit": HOMESCREEN_EMAIL_LIMIT})) # Pass limit via ignored input dict if needed, or adjust fetch_emails_native
-        | RunnableLambda(format_weaviate_objects_for_llm) 
-        | RunnableLambda(lambda formatted_string: {"context": formatted_string})
+        RunnableLambda(lambda _: fetch_emails_native({})) # Fetch emails
+        | RunnableLambda(format_weaviate_objects_for_llm).with_config(run_name="FormatEmailContext")  # Format them, assign name
+        | RunnableLambda(lambda formatted_context: {"formatted_context": formatted_context}).with_config(run_name="PrepareContextDict") # Structure for next step
+        | RunnableLambda(load_and_prepare_prompt_input).with_config(run_name="LoadSettingsAndPrepareInput") # Load settings and create prompt input dict
         | prompt
         | llm
         | parser
     )
     return homescreen_chain
 
-# --- Main Execution Block (Adjust test for new chat chain output) ---
-if __name__ == "__main__":
-    # ... (Initialize client, llm, embeddings as before) ...
-    try:
-        print(f"Connecting to Weaviate at {WEAVIATE_URL}...")
-        weaviate_client = weaviate.connect_to_local()
-        weaviate_client.is_ready()
-        print("Connected to Weaviate.")
-    except Exception as e:
-        print(f"ERROR: Could not connect to Weaviate. {e}")
-        exit(1)
-    
-    llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, api_key=OPENAI_API_KEY)
+# --- Global Chain Initialization --- #
+# ... (moved initialization logic here) ...
+rag_chain_global: RunnableParallel | None = None
+relevance_check_chain_global: RunnableLambda | None = None # Keep type hint flexible
+homescreen_chain_global: RunnableLambda | None = None 
+
+# Initialization block
+try:
+    print(f"(Import) Connecting to Weaviate at {WEAVIATE_URL}...")
+    # Choose connection method based on WEAVIATE_URL
+    if WEAVIATE_URL.startswith("https://") and ".weaviate.network" in WEAVIATE_URL:
+        if not os.getenv("WEAVIATE_API_KEY"):
+             raise ValueError("WEAVIATE_API_KEY required for WCS connection")
+        weaviate_client = weaviate.connect_to_wcs(
+            cluster_url=WEAVIATE_URL,
+            auth_credentials=weaviate.auth.AuthApiKey(os.getenv("WEAVIATE_API_KEY")),
+             headers={"X-OpenAI-Api-Key": OPENAI_API_KEY} if OPENAI_API_KEY else {}
+        )
+    else: # Assume local or custom that connect_to_local handles
+        weaviate_client = weaviate.connect_to_local(
+             headers={"X-OpenAI-Api-Key": OPENAI_API_KEY} if OPENAI_API_KEY else {}
+        )
+        
+    weaviate_client.is_ready() # Check connection
+    print("(Import) Connected to Weaviate.")
+
+    # Initialize LLM and Embeddings
+    llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, api_key=OPENAI_API_KEY, temperature=0.1) # Lower temperature for more deterministic categorization
     embeddings = OpenAIEmbeddings(model=OPENAI_EMBEDDING_MODEL, api_key=OPENAI_API_KEY)
+    print("(Import) LLM and Embeddings initialized.")
     
-    # Create chains for testing
-    rag_chain_native = create_rag_chain_native_chat(llm)
-    relevance_chain = create_relevance_check_chain(llm)
-    homescreen_chain_native = create_homescreen_chain_native(llm)
-    print("\nRAG Email Assistant Initialized for standalone execution.")
+    # Create and assign global chains
+    rag_chain_global = create_rag_chain_native_chat(llm)
+    relevance_check_chain_global = create_relevance_check_chain(llm)
+    homescreen_chain_global = create_homescreen_chain_native(llm)
+    print("(Import) RAG chains created and assigned globally.")
 
-    # --- Test Native Chat Chain + Relevance Check ---
-    print("Example Queries (Chat + Relevance Check):")
-    queries = [
-        "Any urgent items?",
-    ]
-    for query in queries:
-        print(f"\n--- Query: {query} ---")
+except Exception as e:
+    # Ensure globals are None if init fails
+    rag_chain_global = None
+    relevance_check_chain_global = None 
+    homescreen_chain_global = None
+    if 'weaviate_client' in locals() and weaviate_client and weaviate_client.is_connected():
+        weaviate_client.close() # Close connection if open
+    weaviate_client = None
+    print(f"[CRITICAL ERROR] Failed to initialize RAG components during import: {e}")
+    traceback.print_exc() 
+    # Optionally re-raise or exit if initialization is critical for the app to start
+    # raise e 
+
+# --- Standalone Test Block --- # 
+if __name__ == "__main__":
+    if not rag_chain_global or not homescreen_chain_global:
+        print("Chains failed to initialize during import. Exiting test.")
+    else:
+        print("\n--- Testing Homescreen Chain ---")
         try:
-            # Step 1: Get answer and context objects
-            rag_result = rag_chain_native.invoke({"question": query})
-            answer = rag_result.get('answer_text')
-            objects = rag_result.get('retrieved_objects', [])
-            context_str = rag_result.get('formatted_context', '') # Get formatted context too
-            print(f"\nAssistant Answer Text: {answer}")
-            print(f"Retrieved Objects Count: {len(objects)}")
-
-            # Step 2: Run relevance check
-            if answer and context_str:
-                print("\n--- Running Relevance Check --- ")
-                relevance_input = {"answer_text": answer, "formatted_context": context_str}
-                relevance_result = relevance_chain.invoke(relevance_input)
-                relevant_ids = relevance_result.get('ids', [])
-                print(f"Relevance Check Result (IDs): {relevant_ids}")
-                
-                # Step 3: (Simulate main.py) Build final references
-                final_refs = []
-                for obj in objects:
-                    if str(obj.uuid) in relevant_ids:
-                        final_refs.append({"id": str(obj.uuid), "subject": obj.properties.get("subject", "N/A")})
-                print(f"Final References based on Relevance Check: {final_refs}")
-            else:
-                 print("Skipping relevance check (no answer or context).")
-
+            homescreen_result = homescreen_chain_global.invoke({})
+            print("Homescreen Result:")
+            import json
+            print(json.dumps(homescreen_result, indent=2))
         except Exception as e:
-            print(f"An error occurred processing the query: {e}")
+             print(f"Homescreen test failed: {e}")
+             traceback.print_exc()
+        
+        print("\n--- Testing Chat Chain ---")
+        test_query = "What is the status of the LexAnalytica diligence?"
+        print(f"Query: {test_query}")
+        try:
+             # Test just the RAG chain part first
+             chat_result = rag_chain_global.invoke({"question": test_query})
+             print("Chat RAG Result:")
+             print(f"  Answer: {chat_result.get('answer_text')}")
+             print(f"  Retrieved Objects: {len(chat_result.get('retrieved_objects', []))}")
+             print(f"  Formatted Context Snippet: {chat_result.get('formatted_context', '')[:200]}...")
+        except Exception as e:
+             print(f"Chat test failed: {e}")
+             traceback.print_exc()
 
-    # --- Test Homescreen Chain --- 
-    print("\n--- Testing Homescreen Categorization (Native Fetch) --- ")
-    try:
-        homescreen_result = homescreen_chain_native.invoke({})
-        print("\nCategorized Data (Native):")
-        import json
-        print(json.dumps(homescreen_result, indent=2))
-    except Exception as e:
-         print(f"An error occurred processing homescreen chain: {e}")
-
-    # Close Weaviate client connection
+    # Clean up client if testing standalone
     if weaviate_client and weaviate_client.is_connected():
         weaviate_client.close()
-        print("\nWeaviate connection closed.")
-else:
-    # --- Initialization for Import ---
-    try:
-        print("(Import) Connecting to Weaviate...")
-        weaviate_client = weaviate.connect_to_local()
-        weaviate_client.is_ready()
-        print("(Import) Connected to Weaviate.")
-        llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, api_key=OPENAI_API_KEY)
-        embeddings = OpenAIEmbeddings(model=OPENAI_EMBEDDING_MODEL, api_key=OPENAI_API_KEY)
-        
-        # Create the chain instances for export
-        rag_chain_global = create_rag_chain_native_chat(llm) 
-        # Add the relevance check chain
-        relevance_check_chain_global = create_relevance_check_chain(llm)
-        homescreen_chain_global = create_homescreen_chain_native(llm)
-        print("(Import) RAG chains created (including relevance check chain).")
-
-    except Exception as e:
-        print(f"ERROR during import initialization: {e}")
-        traceback.print_exc() # Print the full traceback
-        rag_chain_global = None
-        relevance_check_chain_global = None # Ensure this is None on error
-        homescreen_chain_global = None
-        weaviate_client = None
-        embeddings = None
-
-# --- Main Execution Block (Adjust tests if needed) ---
-if __name__ == "__main__":
-    # ... (Initialize client, llm, embeddings) ...
-    try:
-        print(f"Connecting to Weaviate at {WEAVIATE_URL}...")
-        weaviate_client = weaviate.connect_to_local()
-        weaviate_client.is_ready()
-        print("Connected to Weaviate.")
-    except Exception as e:
-        print(f"ERROR: Could not connect to Weaviate. {e}")
-        exit(1)
-    
-    llm = ChatOpenAI(model=OPENAI_CHAT_MODEL, api_key=OPENAI_API_KEY)
-    embeddings = OpenAIEmbeddings(model=OPENAI_EMBEDDING_MODEL, api_key=OPENAI_API_KEY)
-    
-    # Create chains for testing
-    rag_chain_native = create_rag_chain_native_chat(llm)
-    relevance_chain = create_relevance_check_chain(llm)
-    homescreen_chain_native = create_homescreen_chain_native(llm)
-    print("\nRAG Email Assistant Initialized for standalone execution.")
-
-    # --- Test Native Chat Chain + Relevance Check ---
-    print("Example Queries (Chat + Relevance Check):")
-    queries = [
-        "Any urgent items?",
-    ]
-    for query in queries:
-        print(f"\n--- Query: {query} ---")
-        try:
-            # Step 1: Get answer and context objects
-            rag_result = rag_chain_native.invoke({"question": query})
-            answer = rag_result.get('answer_text')
-            objects = rag_result.get('retrieved_objects', [])
-            context_str = rag_result.get('formatted_context', '') # Get formatted context too
-            print(f"\nAssistant Answer Text: {answer}")
-            print(f"Retrieved Objects Count: {len(objects)}")
-
-            # Step 2: Run relevance check
-            if answer and context_str:
-                print("\n--- Running Relevance Check --- ")
-                relevance_input = {"answer_text": answer, "formatted_context": context_str}
-                relevance_result = relevance_chain.invoke(relevance_input)
-                relevant_ids = relevance_result.get('ids', [])
-                print(f"Relevance Check Result (IDs): {relevant_ids}")
-                
-                # Step 3: (Simulate main.py) Build final references
-                final_refs = []
-                for obj in objects:
-                    if str(obj.uuid) in relevant_ids:
-                        final_refs.append({"id": str(obj.uuid), "subject": obj.properties.get("subject", "N/A")})
-                print(f"Final References based on Relevance Check: {final_refs}")
-            else:
-                 print("Skipping relevance check (no answer or context).")
-
-        except Exception as e:
-            print(f"An error occurred processing the query: {e}")
-
-    # --- Test Homescreen Chain --- 
-    # ... (Homescreen test remains the same) ...
-
-    # Close Weaviate client connection
-    # ... (Cleanup remains the same) ... 
+        print("\nStandalone test finished. Weaviate connection closed.") 

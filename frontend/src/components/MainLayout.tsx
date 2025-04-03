@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Link, Outlet } from 'react-router-dom';
+import { Link, Outlet, useNavigate } from 'react-router-dom';
 import { VscMenu, VscMail, VscArrowUp } from "react-icons/vsc"; // Using VSC icons for now
 import { FiChevronLeft } from "react-icons/fi"; // Icon for logo
 import ChatOverlay from './ChatOverlay'; // Import the overlay
@@ -37,6 +37,7 @@ const MainLayout: React.FC = () => {
     const [currentView, setCurrentView] = useState<'chat' | 'ingest'>('chat'); // State for main view
     const [isMenuOpen, setIsMenuOpen] = useState(false); // State for hamburger menu dropdown
     const menuRef = useRef<HTMLDivElement>(null); // Ref for detecting clicks outside menu
+    const navigate = useNavigate(); // Get navigate function
 
     // Function to close chat and clean up any connections (SSE ref removed)
     const closeChat = useCallback(() => {
@@ -141,15 +142,22 @@ const MainLayout: React.FC = () => {
     };
     // --- End Menu Handling ---
 
+    // --- Logo Click Handler ---
+    const handleLogoClick = () => {
+        setCurrentView('chat'); // Ensure Outlet is visible
+        navigate('/'); // Navigate to the root route (HomeScreen)
+    };
+    // --- End Logo Click Handler ---
+
     return (
         <div className="flex flex-col h-screen bg-white text-gray-800">
             {/* Top Navigation Bar - removed shadow, adjusted padding */}
             <nav className="bg-white p-4 flex justify-between items-center sticky top-0 z-30 border-b border-gray-200"> {/* Increased z-index slightly */}
                 {/* Logo - Sets view back to 'chat' */}
                 <button 
-                    onClick={() => setCurrentView('chat')} 
+                    onClick={handleLogoClick}
                     className="text-blue-600 text-3xl transform -rotate-90 focus:outline-none p-1" // Added padding
-                    aria-label="Go to main chat view"
+                    aria-label="Go to homescreen"
                 >
                     <FiChevronLeft />
                 </button>
@@ -190,8 +198,17 @@ const MainLayout: React.FC = () => {
                                     >
                                         Ingest Emails
                                     </button>
-                                    {/* Add other menu items here if needed */}
-                                    {/* <Link to="/settings" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Settings</Link> */}
+                                    {/* Settings Link */}
+                                     <Link 
+                                        to="/settings"
+                                        onClick={() => {
+                                            setCurrentView('chat'); // Ensure Outlet renders for the route
+                                            setIsMenuOpen(false);
+                                        }}
+                                        className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 focus:outline-none focus:bg-gray-100"
+                                    >
+                                        Settings
+                                    </Link>
                                 </motion.div>
                             )}
                         </AnimatePresence>
@@ -204,7 +221,9 @@ const MainLayout: React.FC = () => {
                 {currentView === 'ingest' ? (
                     <EmailIngestionForm />
                 ) : (
-                    <Outlet /> // Render the default route content (e.g., HomeScreen)
+                    // Pass chatHistory to components rendered via Outlet if they need it
+                    // This requires the child components (like SettingsScreen) to handle the prop
+                    <Outlet context={{ chatHistory }} /> 
                 )}
             </main>
 

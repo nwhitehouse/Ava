@@ -9,6 +9,11 @@ import json
 import time # For caching
 from datetime import datetime, timezone
 import re # Import regex for parsing
+from pathlib import Path # For handling file path
+from typing import List # For list type hinting
+
+# Import settings utilities
+from settings_utils import load_settings, save_settings, UserSettings
 
 # Import the RAG chains and Weaviate client
 # Correctly import the global weaviate_client variable
@@ -19,13 +24,17 @@ from rag_emails import (
     WEAVIATE_CLASS_NAME,
     HomescreenData,
     ChatRagResponse, # Response model for chat
-    EmailRef # Model for references
+    EmailRef, # Model for references
+    llm as llm_global
 )
 
 # --- Caching Globals --- #
 homescreen_cache: HomescreenData | None = None
 last_cache_time: float = 0
 CACHE_DURATION_SECONDS: int = 300 # Cache for 5 minutes
+
+# --- Configuration --- #
+# SETTINGS_FILE constant moved to settings_utils.py
 
 # --- Pydantic Models --- #
 
@@ -66,6 +75,10 @@ class ChatRagResponse(BaseModel):
 # Pydantic model for bulk email ingestion
 class BulkIngestRequest(BaseModel):
     raw_text: str
+
+# Pydantic model for summarize request
+class SummarizeRequest(BaseModel):
+    questions: List[str]
 
 # --- Utility Functions for Parsing --- #
 def parse_bulk_emails(raw_text: str) -> list[dict]:
@@ -147,6 +160,9 @@ def parse_bulk_emails(raw_text: str) -> list[dict]:
              print(f"  Skipped Email Chunk {i+1}: Could not extract a valid body after headers (or no headers found).")
 
     return emails
+
+# --- Utility Functions for Settings --- #
+# load_settings and save_settings moved to settings_utils.py
 
 # Async context manager for lifespan events
 @asynccontextmanager
@@ -434,6 +450,70 @@ async def get_all_emails():
     except Exception as e:
         print(f"Error fetching all emails: {e}")
         raise HTTPException(status_code=500, detail=f"Error fetching email list: {str(e)}")
+
+# --- Settings Endpoints --- #
+@app.get("/api/settings", response_model=UserSettings)
+async def get_settings():
+    """Retrieves the current user settings."""
+    print("--- GET /api/settings called ---")
+    # Load settings using the utility function from settings_utils
+    settings = await asyncio.to_thread(load_settings)
+    return settings
+
+@app.post("/api/settings")
+async def update_settings(settings: UserSettings): # Request body is parsed into UserSettings model
+    """Updates and saves the user settings."""
+    print(f"--- POST /api/settings called with data: {settings} ---")
+    try:
+        # Save settings using the utility function from settings_utils
+        await asyncio.to_thread(save_settings, settings)
+        return {"message": "Settings updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save settings: {str(e)}")
+
+# --- Summarize Chat Questions Endpoint --- #
+@app.post("/api/summarize_questions")
+async def summarize_questions(request: SummarizeRequest):
+    """Uses an LLM to summarize key topics from a list of user questions."""
+    if not request.questions:
+        return {"summary": "No questions provided to summarize."}
+
+    # Use the globally initialized LLM (ensure it's available)
+    # NOTE: Consider error handling if llm_global isn't initialized
+    # This reuses the LLM instance from rag_emails.py initialization
+    if not llm_global:
+         raise HTTPException(status_code=503, detail="LLM service not available")
+
+    print(f"--- POST /api/summarize_questions called with {len(request.questions)} questions ---")
+    
+    # Format questions for the prompt
+    formatted_questions = "\n".join([f"- {q}" for q in request.questions])
+    
+    prompt_template = f"""You are an assistant that analyzes user questions to identify recurring themes and important topics.
+    Based *only* on the list of user questions below, identify the key topics, keywords, project names, or people mentioned frequently.
+    Focus on what the user seems to care most about or asks about repeatedly.
+    Provide a concise summary (1-2 sentences, maybe a few bullet points) suitable for helping the user define what is important to them regarding their emails.
+
+    User Questions:
+    {formatted_questions}
+
+    Concise Summary:
+    """
+    prompt = ChatPromptTemplate.from_template(prompt_template)
+    
+    # Create a simple chain: prompt -> LLM -> string output
+    summarize_chain = prompt | llm_global | StrOutputParser()
+    
+    try:
+        # Invoke the chain asynchronously
+        summary = await summarize_chain.ainvoke({}) # Pass empty dict as input to trigger chain
+        print(f"--- Generated Summary: {summary} ---")
+        return {"summary": summary}
+        
+    except Exception as e:
+        print(f"[ERROR] Failed to summarize questions: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to generate summary: {str(e)}")
 
 # --- Original Streaming Chat Endpoint (Commented out for now) ---
 # from sse_starlette.sse import EventSourceResponse

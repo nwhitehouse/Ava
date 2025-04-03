@@ -9,6 +9,7 @@ import MainLayout from './components/MainLayout';
 const HomeScreen = lazy(() => import('./pages/HomeScreen'));
 const EmailDetailScreen = lazy(() => import('./pages/EmailDetailScreen')); // Import new detail page
 const EmailListScreen = lazy(() => import('./pages/EmailListScreen')); // Import new list page
+const SettingsScreen = lazy(() => import('./pages/SettingsScreen')); // Import SettingsScreen
 
 const App: React.FC = () => {
   return (
@@ -21,6 +22,7 @@ const App: React.FC = () => {
           <Route path="emails" element={<EmailListScreen />} />
           {/* Add route for the email detail page with parameter */}
           <Route path="email/:emailId" element={<EmailDetailScreen />} />
+          <Route path="settings" element={<SettingsScreen />} /> {/* Add settings route */}
           {/* You could add other routes here later */}
           {/* Example: <Route path="settings" element={<SettingsScreen />} /> */}
         </Route>

@@ -57,7 +57,7 @@ const HomeScreen: React.FC = () => {
         } finally {
             setLoading(false);
         }
-    }, [data]); // Depend on `data` so we can avoid full loading state on background refresh
+    }, []); // Empty dependency array: fetchData function is stable
 
     // Initial fetch
     useEffect(() => {
