@@ -19,102 +19,70 @@ const MainLayout: React.FC = () => {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [chatHistory, setChatHistory] = useState<Message[]>([]);
     const [isChatOpen, setIsChatOpen] = useState(false); // State for overlay visibility
-    const eventSourceRef = useRef<EventSource | null>(null); // Ref for SSE connection
 
-    // Function to close chat and clean up SSE connection
+    // Function to close chat and clean up any connections (SSE ref removed)
     const closeChat = useCallback(() => {
         setIsChatOpen(false);
-        if (eventSourceRef.current) {
-            console.log("[SSE] Closing EventSource connection.");
-            eventSourceRef.current.close();
-            eventSourceRef.current = null;
-        }
+        // No eventSourceRef cleanup needed anymore
         setIsSubmitting(false); // Ensure submitting state is reset
     }, []);
 
     const handleChatSubmit = async (event?: React.FormEvent) => {
-        event?.preventDefault(); // Prevent default if called from form
+        event?.preventDefault();
         const messageText = chatInput.trim();
         if (!messageText || isSubmitting) return;
 
         setIsSubmitting(true);
-        const originalMessage = chatInput;
-        setChatInput('');
+        setChatInput(''); // Clear input immediately
 
-        // Add user message
+        // Add user message to history
         const userMessageId = `user-${Date.now()}`;
         setChatHistory(prev => [...prev, { id: userMessageId, sender: 'user', text: messageText }]);
 
-        // Close existing SSE connection if any
-        if (eventSourceRef.current) {
-            eventSourceRef.current.close();
-        }
-
-        // Add placeholder for assistant message
+        // Add placeholder for assistant response (non-streaming)
         const assistantMessageId = `assistant-${Date.now()}`;
-        setChatHistory(prev => [...prev, { id: assistantMessageId, sender: 'assistant', text: '', isStreaming: true }]);
+        setChatHistory(prev => [...prev, { id: assistantMessageId, sender: 'assistant', text: '...' }]); // Indicate loading
 
-        console.log("[SSE] Initializing EventSource...");
-        // Initiate SSE connection
-        eventSourceRef.current = new EventSource(`http://localhost:3001/api/chat?message=${encodeURIComponent(messageText)}`);
+        try {
+            console.log(`[API] Sending query to /api/email_rag: ${messageText}`);
+            const response = await fetch('http://localhost:3001/api/email_rag', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ message: messageText }),
+            });
 
-        eventSourceRef.current.onmessage = (event) => {
-            try {
-                const data = JSON.parse(event.data);
-
-                if (data.chunk) {
-                    // Update the streaming message text
-                    setChatHistory(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? { ...msg, text: msg.text + data.chunk }
-                            : msg
-                    ));
-                }
-
-                if (data.end) {
-                    console.log("[SSE] Stream ended by server.");
-                    // Mark streaming as complete
-                    setChatHistory(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? { ...msg, isStreaming: false }
-                            : msg
-                    ));
-                    eventSourceRef.current?.close(); // Close connection after server signals end
-                    eventSourceRef.current = null;
-                    setIsSubmitting(false);
-                }
-
-                if (data.error) { // Handle explicit error message from stream
-                    console.error("[SSE] Error message from server:", data.error);
-                    setChatHistory(prev => prev.map(msg =>
-                        msg.id === assistantMessageId
-                            ? { ...msg, text: `Error: ${data.error}`, isStreaming: false }
-                            : msg
-                    ));
-                    closeChat();
-                }
-            } catch (parseError) {
-                console.error("[SSE] Error parsing message data:", parseError, "Raw data:", event.data);
-                // Update UI to show generic parse error
-                setChatHistory(prev => prev.map(msg =>
-                    msg.id === assistantMessageId
-                        ? { ...msg, text: `${msg.text}\n\nError: Could not parse response.`, isStreaming: false }
-                        : msg
-                ));
-                closeChat();
+            if (!response.ok) {
+                // Handle HTTP errors (e.g., 4xx, 5xx)
+                const errorData = await response.json().catch(() => ({ detail: "Unknown error" }));
+                console.error("[API] Error response:", response.status, errorData);
+                throw new Error(errorData.detail || `HTTP error ${response.status}`);
             }
-        };
 
-        eventSourceRef.current.onerror = (error) => {
-            console.error("[SSE] EventSource failed:", error);
+            const result = await response.json();
+            console.log("[API] Received answer:", result.answer);
+
+            // Update the placeholder with the actual response
             setChatHistory(prev => prev.map(msg =>
-                 msg.id === assistantMessageId
-                    ? { ...msg, text: `${msg.text}\n\nError: Connection failed.`, isStreaming: false }
+                msg.id === assistantMessageId
+                    ? { ...msg, text: result.answer || "Sorry, I couldn't get a response." } // Use result.answer
                     : msg
             ));
-            closeChat();
-            setChatInput(originalMessage); // Restore input on error
-        };
+
+        } catch (error) {
+            console.error("[API] Failed to fetch RAG response:", error);
+            // Update the placeholder message to show an error
+            setChatHistory(prev => prev.map(msg =>
+                msg.id === assistantMessageId
+                    ? { ...msg, text: `Error: ${error instanceof Error ? error.message : 'Failed to connect'}` }
+                    : msg
+            ));
+            // Optionally restore input or handle error differently
+            // setChatInput(messageText); 
+        } finally {
+            setIsSubmitting(false); // Re-enable input
+        }
     };
 
     // Add onFocus handler to open chat
@@ -162,7 +130,7 @@ const MainLayout: React.FC = () => {
                 <form onSubmit={handleChatSubmit} className="relative max-w-3xl mx-auto">
                     <input
                         type="text"
-                        placeholder="How can I help?"
+                        placeholder="Ask about your emails..." // Updated placeholder
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
                         onFocus={handleInputFocus}

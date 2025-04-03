@@ -4,36 +4,30 @@ import { Link } from 'react-router-dom';
 import { FiCornerUpLeft, FiChevronDown, FiLoader } from 'react-icons/fi';
 import { motion, AnimatePresence } from 'framer-motion'; // Import animation
 
-// Define interfaces for the data structure
-interface Email {
-    id: string;
-    sender: string;
+// --- New Interfaces matching Backend --- //
+interface EmailInfo {
     subject: string;
-    snippet: string;
+    sender: string;
+    reasoning: string;
+    // Note: We don't have a unique ID from the backend model currently,
+    // so we'll use subject+sender for keys, which might not be ideal if duplicates exist.
 }
 
-interface WaitingPerson {
-    id: string;
-    name: string;
-    topic: string;
+interface HomescreenData {
+    urgent: EmailInfo[];
+    delegate: EmailInfo[];
+    waiting_on: EmailInfo[];
 }
 
-interface Meeting {
-    id: string;
-    title: string;
-    time: string;
-}
-
-interface DashboardData {
-    userName: string;
-    urgentEmails: Email[];
-    delegatableEmails: Email[];
-    waitingFor: WaitingPerson[];
-    meetingsToPrep: Meeting[];
-}
+// --- Removed Old Interfaces --- //
+// interface Email { ... }
+// interface WaitingPerson { ... }
+// interface Meeting { ... }
+// interface DashboardData { ... }
 
 const HomeScreen: React.FC = () => {
-    const [data, setData] = useState<DashboardData | null>(null);
+    // Use the new interface for state
+    const [data, setData] = useState<HomescreenData | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -42,13 +36,14 @@ const HomeScreen: React.FC = () => {
             setLoading(true);
             setError(null);
             try {
-                // NOTE: Assumes backend runs on port 3001
-                // We'll need CORS enabled on the backend for this to work from the frontend dev server
-                const response = await fetch('http://localhost:3001/api/mock/dashboard');
+                // Fetch from the new homescreen endpoint
+                const response = await fetch('http://localhost:3001/api/homescreen_emails');
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    const errorText = await response.text(); // Get error details if available
+                    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
                 }
-                const result: DashboardData = await response.json();
+                // Expect data in the HomescreenData structure
+                const result: HomescreenData = await response.json();
                 setData(result);
             } catch (err: any) {
                 console.error("Fetch error:", err);
@@ -59,9 +54,8 @@ const HomeScreen: React.FC = () => {
         };
 
         fetchData();
-    }, []); // Empty dependency array means this runs once on mount
+    }, []);
 
-    // Function to get time-based greeting
     const getGreeting = (): string => {
         const hour = new Date().getHours();
         if (hour < 12) return "Good morning";
@@ -77,102 +71,103 @@ const HomeScreen: React.FC = () => {
         return <div className="text-red-600 p-4 bg-red-50 border border-red-300 rounded">Error: {error}</div>;
     }
 
-    if (!data) {
-        return <div className="text-gray-500">No data available.</div>;
+    // Handle case where data might be null or missing categories (though backend defaults to empty lists)
+    if (!data || !data.urgent || !data.delegate || !data.waiting_on) {
+        return <div className="text-gray-500">No email data available or data is incomplete.</div>;
     }
 
-    // Helper function for simple pluralization
     const pluralize = (count: number, singular: string, plural: string): string => {
         return count === 1 ? singular : plural;
     };
 
-    // Consistent text styling
-    const sectionHeaderStyle = "text-base font-bold text-gray-700 mb-3"; // Updated weight
-    const listItemStyle = "text-sm text-gray-600"; // Smaller text for list items
-    const linkStyle = "hover:underline text-gray-800"; // Default link style
-    const bulletPointStyle = "list-disc list-inside ml-1"; // Simple bullet point
+    const sectionHeaderStyle = "text-base font-bold text-gray-700 mb-3";
+    const listItemStyle = "text-sm text-gray-600";
+    // Removed linkStyle as we don't have email IDs to link to currently
+    const bulletPointStyle = "list-disc list-inside ml-1";
 
     return (
-        <div className="space-y-6 max-w-3xl mx-auto"> { /* Constrain width */ }
+        <div className="space-y-6 max-w-3xl mx-auto">
+            {/* Updated Greeting - no user name */}
             <h1 className="text-4xl font-semibold text-gray-800">
-                {getGreeting()},<br />{data.userName}.
+                {getGreeting()}.
             </h1>
 
-            {/* Urgent Emails */}
+            {/* Urgent Emails - Updated structure */}
             <section>
                 <h2 className={sectionHeaderStyle}>
-                    You have {data.urgentEmails.length} {pluralize(data.urgentEmails.length, 'email', 'emails')} that need a response from you ASAP.
+                    {data.urgent.length > 0
+                        ? `You have ${data.urgent.length} urgent ${pluralize(data.urgent.length, 'email', 'emails')} needing attention:`
+                        : "No urgent emails identified."
+                    }
                 </h2>
-                <ul className={`space-y-1.5 ${bulletPointStyle}`}>
-                    {data.urgentEmails.map(email => (
-                        <li key={email.id} className={`${listItemStyle} flex items-start`}>
-                            <FiCornerUpLeft className="text-blue-500 mr-2 mt-0.5 flex-shrink-0" size={14} />
-                            <Link to={`/email/${email.id}`} className={linkStyle}>
-                                <span className="font-medium">{email.sender}</span> needs you to <span className="font-medium">{email.subject}</span>.
-                            </Link>
-                        </li>
-                    ))}
-                </ul>
+                {data.urgent.length > 0 && (
+                    <ul className={`space-y-1.5 ${bulletPointStyle}`}>
+                        {data.urgent.map((email, index) => (
+                            <li key={`urgent-${index}`} className={`${listItemStyle} flex items-start`}>
+                                <FiCornerUpLeft className="text-red-500 mr-2 mt-0.5 flex-shrink-0" size={14} />
+                                <div>
+                                    <span className="font-medium">{email.subject}</span> from <span className="font-medium">{email.sender}</span>
+                                    <p className="text-xs text-gray-500 pl-4">Reasoning: {email.reasoning}</p>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                )}
             </section>
 
             <hr className="border-gray-200" />
 
-            {/* Delegatable Emails */}
+            {/* Delegatable Emails - Updated structure */}
             <section>
-                 <Disclosure title={`You have ${data.delegatableEmails.length} ${pluralize(data.delegatableEmails.length, 'email', 'emails')} that I can delegate for you`} headerStyle={sectionHeaderStyle}>
-                     <ul className={`space-y-1.5 ${bulletPointStyle} mt-2`}>
-                        {data.delegatableEmails.map(email => (
-                            <li key={email.id} className={`${listItemStyle} flex items-start`}>
-                                <span className="mr-2 mt-0.5">•</span>
-                                <Link to={`/email/${email.id}`} className={linkStyle}>
-                                   <span className="font-medium">{email.sender}</span> - <span className="italic">{email.subject}</span>
-                                </Link>
-                            </li>
-                        ))}
-                    </ul>
+                 <Disclosure title={`${data.delegate.length} ${pluralize(data.delegate.length, 'email', 'emails')} identified that could potentially be delegated`} headerStyle={sectionHeaderStyle}>
+                     {data.delegate.length > 0 ? (
+                         <ul className={`space-y-1.5 ${bulletPointStyle} mt-2`}>
+                             {data.delegate.map((email, index) => (
+                                 <li key={`delegate-${index}`} className={`${listItemStyle} flex items-start`}>
+                                     <span className="mr-2 mt-0.5">•</span>
+                                     <div>
+                                         <span className="font-medium">{email.subject}</span> from <span className="font-medium">{email.sender}</span>
+                                         <p className="text-xs text-gray-500 pl-4">Reasoning: {email.reasoning}</p>
+                                     </div>
+                                 </li>
+                             ))}
+                         </ul>
+                     ) : (
+                         <p className={`${listItemStyle} mt-2`}>No specific emails identified for delegation based on current context.</p>
+                     )}
                 </Disclosure>
             </section>
 
             <hr className="border-gray-200" />
 
-            {/* Waiting For */}
+            {/* Waiting On Emails - New structure */}
             <section>
-                <Disclosure title={`You are waiting on info from ${data.waitingFor.length} people. I can chase them up`} headerStyle={sectionHeaderStyle}>
-                     <ul className={`space-y-1.5 ${bulletPointStyle} mt-2`}>
-                        {data.waitingFor.map(person => (
-                            <li key={person.id} className={`${listItemStyle} flex items-start`}>
-                                <span className="mr-2 mt-0.5">•</span>
-                                <div>
-                                    <span className="font-medium">{person.name}</span> - <span className="italic">{person.topic}</span>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
-                </Disclosure>
-            </section>
-
-            <hr className="border-gray-200" />
-
-            {/* Meetings to Prep */}
-            <section>
-                <Disclosure title={`You need to prep for ${data.meetingsToPrep.length} meetings this week. I can book out time for this`} headerStyle={sectionHeaderStyle}>
-                    <ul className={`space-y-1.5 ${bulletPointStyle} mt-2`}>
-                        {data.meetingsToPrep.map(meeting => (
-                            <li key={meeting.id} className={`${listItemStyle} flex items-start`}>
-                                <span className="mr-2 mt-0.5">•</span>
-                                <div>
-                                    <span className="font-medium">{meeting.title}</span> - <span className="italic">{meeting.time}</span>
-                                </div>
-                            </li>
-                        ))}
-                    </ul>
+                <Disclosure title={`${data.waiting_on.length} ${pluralize(data.waiting_on.length, 'email', 'emails')} identified where you are waiting for a response`} headerStyle={sectionHeaderStyle}>
+                     {data.waiting_on.length > 0 ? (
+                         <ul className={`space-y-1.5 ${bulletPointStyle} mt-2`}>
+                             {data.waiting_on.map((email, index) => (
+                                 <li key={`waiting-${index}`} className={`${listItemStyle} flex items-start`}>
+                                    <span className="mr-2 mt-0.5">•</span>
+                                    <div>
+                                        <span className="font-medium">{email.subject}</span> from <span className="font-medium">{email.sender}</span>
+                                        <p className="text-xs text-gray-500 pl-4">Reasoning: {email.reasoning}</p>
+                                    </div>
+                                 </li>
+                            ))}
+                         </ul>
+                     ) : (
+                         <p className={`${listItemStyle} mt-2`}>No specific emails identified where you are waiting for info based on current context.</p>
+                     )}
                  </Disclosure>
             </section>
+
+             {/* Removed Meetings Section */}
+
         </div>
     );
 };
 
-// Simple Disclosure/Accordion Component - accept headerStyle prop
+// Simple Disclosure/Accordion Component - unchanged
 interface DisclosureProps {
     title: string;
     children: React.ReactNode;
@@ -181,14 +176,11 @@ interface DisclosureProps {
 
 const Disclosure: React.FC<DisclosureProps> = ({ title, children, headerStyle }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const defaultHeaderStyle = "text-base font-bold text-gray-700 mb-3"; // Updated default weight
-
-    // Animation variants for content slide
+    const defaultHeaderStyle = "text-base font-bold text-gray-700 mb-3";
     const contentVariants = {
         collapsed: { height: 0, opacity: 0, transition: { duration: 0.3, ease: "easeInOut" } },
         open: { height: "auto", opacity: 1, transition: { duration: 0.3, ease: "easeInOut" } }
     };
-
     return (
         <div>
             <button
@@ -197,25 +189,19 @@ const Disclosure: React.FC<DisclosureProps> = ({ title, children, headerStyle })
                 aria-expanded={isOpen}
             >
                 <span>{title}</span>
-                {/* Animate chevron rotation */}
-                <motion.div
-                     animate={{ rotate: isOpen ? 180 : 0 }}
-                     transition={{ duration: 0.3 }}
-                 >
-                    <FiChevronDown size={20} className={`text-blue-500`} />
-                 </motion.div>
+                <motion.div animate={{ rotate: isOpen ? 180 : 0 }} transition={{ duration: 0.3 }}>
+                    <FiChevronDown className="text-gray-500" />
+                </motion.div>
             </button>
-            {/* Animate content visibility */}
             <AnimatePresence initial={false}>
                 {isOpen && (
                     <motion.div
                         key="content"
-                        variants={contentVariants}
                         initial="collapsed"
                         animate="open"
                         exit="collapsed"
-                        style={{ overflow: 'hidden' }} // Prevent content overflow during animation
-                        className="mt-1"
+                        variants={contentVariants}
+                        style={{ overflow: 'hidden' }}
                     >
                         {children}
                     </motion.div>
