@@ -53,10 +53,14 @@ const ChatOverlay: React.FC<ChatOverlayProps> = ({ messages, isOpen, onClose }) 
             {/* Message Container */}
             {/* Make sure this container itself allows scrolling */}
             <div className="flex-grow overflow-y-auto p-6 flex flex-col">
-                {/* Remove the AnimatePresence and motion.div wrapper around each message */}
                 {messages.map((msg) => (
                     <div key={msg.id} className="mb-10">
-                        <ChatMessage sender={msg.sender} text={msg.text} />
+                        <ChatMessage 
+                            sender={msg.sender} 
+                            text={msg.text} 
+                            references={msg.references}
+                            onClose={onClose}
+                        />
                     </div>
                 ))}
                 {/* Empty div at the end to ensure scrollIntoView works */}

@@ -5,12 +5,26 @@ import { FiChevronLeft } from "react-icons/fi"; // Icon for logo
 import ChatOverlay from './ChatOverlay'; // Import the overlay
 import { AnimatePresence } from 'framer-motion'; // Import AnimatePresence
 
-// Message type definition
+// --- Interfaces --- //
+
+// For email references in chat responses
+interface EmailRef {
+    id: string;
+    subject: string;
+}
+
+// Message type definition - added optional references
 export interface Message {
-    id: string; // Use string IDs for potential future needs
+    id: string;
     sender: 'user' | 'assistant';
     text: string;
-    isStreaming?: boolean; // Flag for streaming state
+    references?: EmailRef[]; // Optional list of email references
+}
+
+// Expected structure from /api/email_rag
+interface ChatRagApiResponse {
+    answer_text: string;
+    references: EmailRef[];
 }
 
 const MainLayout: React.FC = () => {
@@ -41,7 +55,12 @@ const MainLayout: React.FC = () => {
 
         // Add placeholder for assistant response (non-streaming)
         const assistantMessageId = `assistant-${Date.now()}`;
-        setChatHistory(prev => [...prev, { id: assistantMessageId, sender: 'assistant', text: '...' }]); // Indicate loading
+        setChatHistory(prev => [...prev, { 
+            id: assistantMessageId, 
+            sender: 'assistant', 
+            text: '...' 
+            // No references initially
+        }]);
 
         try {
             console.log(`[API] Sending query to /api/email_rag: ${messageText}`);
@@ -55,18 +74,23 @@ const MainLayout: React.FC = () => {
 
             if (!response.ok) {
                 // Handle HTTP errors (e.g., 4xx, 5xx)
-                const errorData = await response.json().catch(() => ({ detail: "Unknown error" }));
+                const errorData = await response.json().catch(() => ({ detail: "Unknown server error" }));
                 console.error("[API] Error response:", response.status, errorData);
                 throw new Error(errorData.detail || `HTTP error ${response.status}`);
             }
 
-            const result = await response.json();
-            console.log("[API] Received answer:", result.answer);
+            // Expect structure: { answer_text: string, references: EmailRef[] }
+            const result: ChatRagApiResponse = await response.json();
+            console.log("[API] Received structured answer:", result);
 
-            // Update the placeholder with the actual response
+            // Update the placeholder with the actual response and references
             setChatHistory(prev => prev.map(msg =>
                 msg.id === assistantMessageId
-                    ? { ...msg, text: result.answer || "Sorry, I couldn't get a response." } // Use result.answer
+                    ? { 
+                        ...msg, 
+                        text: result.answer_text || "Sorry, I couldn't get a response.", 
+                        references: result.references || [] // Add references
+                      }
                     : msg
             ));
 

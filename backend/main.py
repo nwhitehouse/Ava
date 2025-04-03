@@ -10,12 +10,23 @@ import time # For caching
 
 # Import the RAG chains and Weaviate client
 # Correctly import the global weaviate_client variable
-from rag_emails import rag_chain_global, homescreen_chain_global, weaviate_client, WEAVIATE_CLASS_NAME, HomescreenData # Import the Pydantic model for caching type hint
+from rag_emails import (
+    rag_chain_global, 
+    homescreen_chain_global, 
+    relevance_check_chain_global, # Import the new chain
+    weaviate_client, 
+    WEAVIATE_CLASS_NAME,
+    HomescreenData,
+    ChatRagResponse, # Response model for chat
+    EmailRef # Model for references
+)
 
 # --- Caching Globals --- #
 homescreen_cache: HomescreenData | None = None
 last_cache_time: float = 0
 CACHE_DURATION_SECONDS: int = 300 # Cache for 5 minutes
+
+# --- Pydantic Models --- #
 
 # Pydantic model for chat requests
 class ChatRequest(BaseModel):
@@ -35,10 +46,20 @@ class EmailListItem(BaseModel):
     sender: str
     subject: str
     received_date: str
-
+    
 # Pydantic model for all emails response
 class AllEmailsResponse(BaseModel):
     emails: list[EmailListItem]
+
+# Define EmailRef BEFORE ChatRagResponse
+class EmailRef(BaseModel):
+    id: str
+    subject: str
+
+# Pydantic model for ChatRagResponse
+class ChatRagResponse(BaseModel):
+    answer_text: str
+    references: list[EmailRef]
 
 # Async context manager for lifespan events
 @asynccontextmanager
@@ -48,7 +69,7 @@ async def lifespan(app: FastAPI):
     if not weaviate_client or not weaviate_client.is_connected():
         print("Weaviate client not connected on startup!")
         # Handle error appropriately - maybe prevent startup or log critical error
-    if not rag_chain_global or not homescreen_chain_global:
+    if not rag_chain_global or not homescreen_chain_global or not relevance_check_chain_global:
         print("RAG chains not initialized on startup!")
         # Handle error appropriately
     yield
@@ -73,25 +94,71 @@ app.add_middleware(
 def read_root():
     return {"message": "Welcome to the Ava Backend"}
 
-# --- RAG Email Chat Endpoint ---
-@app.post("/api/email_rag")
+# --- RAG Email Chat Endpoint (Two-LLM Call for References) ---
+@app.post("/api/email_rag", response_model=ChatRagResponse)
 async def email_rag_query(request: ChatRequest):
-    """Receives a question, queries emails via RAG, returns text answer."""
-    if not rag_chain_global:
+    """Runs RAG to get answer, then checks relevance for references."""
+    if not rag_chain_global or not relevance_check_chain_global:
         raise HTTPException(status_code=503, detail="RAG service not available")
-    
     query = request.message
     if not query:
         raise HTTPException(status_code=400, detail="Message cannot be empty")
-
+    
     try:
-        print(f"Invoking RAG chain for query: {query}")
-        # LangChain RAG chains are often synchronous, run in thread pool
-        result = await asyncio.to_thread(rag_chain_global.invoke, query)
-        print(f"RAG chain result: {result}")
-        return {"answer": result.get('answer', "Sorry, I couldn't process that request.")}
+        # --- Step 1: Invoke primary RAG chain --- 
+        print(f"Invoking primary RAG chain for query: {query}")
+        input_dict = {"question": query}
+        # Expects: {"retrieved_objects": [...], "formatted_context": "...", "answer_text": "..."}
+        rag_result = await asyncio.to_thread(rag_chain_global.invoke, input_dict)
+        
+        answer_text = rag_result.get("answer_text", "")
+        retrieved_objects = rag_result.get("retrieved_objects", [])
+        formatted_context = rag_result.get("formatted_context", "") # Get context for relevance check
+        
+        print(f"Primary RAG answer text: {answer_text}")
+        print(f"Primary RAG retrieved {len(retrieved_objects)} objects")
+
+        # --- Step 2: Invoke Relevance Check Chain --- #
+        relevant_ids = []
+        if answer_text and formatted_context and retrieved_objects: # Only run if we have ingredients
+            try:
+                print("--- Invoking Relevance Check Chain --- ")
+                relevance_input = {"answer_text": answer_text, "formatted_context": formatted_context}
+                # Expects: {"ids": [...]} 
+                relevance_result = await asyncio.to_thread(relevance_check_chain_global.invoke, relevance_input)
+                relevant_ids = relevance_result.get('ids', [])
+                print(f"Relevance Check found IDs: {relevant_ids}")
+            except Exception as relevance_exc:
+                # Log error but don't fail the whole request, just return no references
+                print(f"[ERROR] Relevance check chain failed: {relevance_exc}")
+                relevant_ids = [] # Default to empty list on error
+        else:
+             print("Skipping relevance check (missing answer, context, or objects).")
+
+        # --- Step 3: Build final references based on relevance check --- #
+        references_list: list[EmailRef] = []
+        object_map = {str(obj.uuid): obj for obj in retrieved_objects} # Map IDs to objects for easy lookup
+        
+        for rel_id in relevant_ids:
+            if rel_id in object_map:
+                 obj = object_map[rel_id]
+                 subject = obj.properties.get("subject", "No Subject")
+                 references_list.append(EmailRef(id=rel_id, subject=subject))
+                 print(f"[Final Reference Added] ID: {rel_id}, Subject: {subject}")
+            else:
+                 print(f"[WARN] Relevant ID {rel_id} not found in originally retrieved objects.")
+
+        # Construct final response
+        final_response = ChatRagResponse(
+            answer_text=answer_text or "Sorry, I couldn't generate a response.", 
+            references=references_list
+        )
+        
+        print(f"Final structured response with relevance check: {final_response}")
+        return final_response 
+        
     except Exception as e:
-        print(f"Error invoking RAG chain: {e}")
+        print(f"Error invoking/processing RAG chains: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing email query: {str(e)}")
 
 # --- Homescreen Email Categorization Endpoint ---
@@ -157,13 +224,16 @@ async def get_email_details(email_id: str):
         print(f"Fetching email with ID: {email_id}")
         email_collection = weaviate_client.collections.get(WEAVIATE_CLASS_NAME)
         
-        # Fetch the object by UUID
-        email_object = email_collection.query.fetch_object_by_id(email_id)
+        # Fetch the object by UUID, specifying properties to return
+        email_object = email_collection.query.fetch_object_by_id(
+            uuid=email_id,
+            return_properties=["sender", "subject", "body", "received_date"] 
+        )
 
         if email_object is None:
             raise HTTPException(status_code=404, detail="Email not found")
 
-        print(f"Found email: {email_object.properties}")
+        print(f"Found email properties: {email_object.properties}") # Log fetched props
         # Construct the response using the Pydantic model
         response_data = EmailDetails(
             id=str(email_object.uuid), # Use the actual uuid from the object
