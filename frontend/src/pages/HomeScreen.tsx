@@ -60,6 +60,14 @@ const HomeScreen: React.FC = () => {
         fetchData();
     }, []); // Empty dependency array means this runs once on mount
 
+    // Function to get time-based greeting
+    const getGreeting = (): string => {
+        const hour = new Date().getHours();
+        if (hour < 12) return "Good morning";
+        if (hour < 18) return "Good afternoon";
+        return "Good evening";
+    };
+
     if (loading) {
         return <div className="flex justify-center items-center h-64"><FiLoader className="animate-spin h-8 w-8 text-blue-600" /></div>;
     }
@@ -78,15 +86,15 @@ const HomeScreen: React.FC = () => {
     };
 
     // Consistent text styling
-    const sectionHeaderStyle = "text-base font-semibold text-gray-700 mb-3"; // Slightly smaller, less bottom margin
+    const sectionHeaderStyle = "text-base font-bold text-gray-700 mb-3"; // Updated weight
     const listItemStyle = "text-sm text-gray-600"; // Smaller text for list items
     const linkStyle = "hover:underline text-gray-800"; // Default link style
     const bulletPointStyle = "list-disc list-inside ml-1"; // Simple bullet point
 
     return (
         <div className="space-y-6 max-w-3xl mx-auto"> { /* Constrain width */ }
-            <h1 className="text-4xl font-normal text-gray-800">
-                Good morning,<br />{data.userName}.
+            <h1 className="text-4xl font-semibold text-gray-800">
+                {getGreeting()},<br />{data.userName}.
             </h1>
 
             {/* Urgent Emails */}
@@ -172,7 +180,7 @@ interface DisclosureProps {
 
 const Disclosure: React.FC<DisclosureProps> = ({ title, children, headerStyle }) => {
     const [isOpen, setIsOpen] = useState(false);
-    const defaultHeaderStyle = "text-base font-semibold text-gray-700 mb-3";
+    const defaultHeaderStyle = "text-base font-bold text-gray-700 mb-3"; // Updated default weight
 
     return (
         <div>
