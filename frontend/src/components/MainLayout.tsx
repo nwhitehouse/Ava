@@ -3,6 +3,7 @@ import { Link, Outlet } from 'react-router-dom';
 import { VscMenu, VscMail, VscArrowUp } from "react-icons/vsc"; // Using VSC icons for now
 import { FiChevronLeft } from "react-icons/fi"; // Icon for logo
 import ChatOverlay from './ChatOverlay'; // Import the overlay
+import { AnimatePresence } from 'framer-motion'; // Import AnimatePresence
 
 // Message type definition
 export interface Message {
@@ -37,7 +38,6 @@ const MainLayout: React.FC = () => {
         if (!messageText || isSubmitting) return;
 
         setIsSubmitting(true);
-        setIsChatOpen(true); // Open chat overlay ON SUBMIT
         const originalMessage = chatInput;
         setChatInput('');
 
@@ -117,6 +117,11 @@ const MainLayout: React.FC = () => {
         };
     };
 
+    // Add onFocus handler to open chat
+    const handleInputFocus = () => {
+        setIsChatOpen(true);
+    };
+
     return (
         <div className="flex flex-col h-screen bg-white text-gray-800">
             {/* Top Navigation Bar - removed shadow, adjusted padding */}
@@ -145,8 +150,12 @@ const MainLayout: React.FC = () => {
                 <Outlet />
             </main>
 
-            {/* Chat Overlay - Pass history directly */}
-            <ChatOverlay messages={chatHistory} isOpen={isChatOpen} onClose={closeChat} />
+            {/* Chat Overlay - Wrap in AnimatePresence */}
+            <AnimatePresence>
+                {isChatOpen && (
+                    <ChatOverlay messages={chatHistory} isOpen={isChatOpen} onClose={closeChat} />
+                )}
+            </AnimatePresence>
 
             {/* Bottom Input Bar */}
             <footer className="bg-white p-3 sticky bottom-0 z-50 border-t border-gray-200"> { /* Increased z-index */ }
@@ -156,6 +165,7 @@ const MainLayout: React.FC = () => {
                         placeholder="How can I help?"
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
+                        onFocus={handleInputFocus}
                         disabled={isSubmitting}
                         className="w-full py-2 px-4 pr-12 border border-gray-300 rounded-full bg-white text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                     />

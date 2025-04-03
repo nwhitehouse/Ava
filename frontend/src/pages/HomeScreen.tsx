@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 // Using react-icons/fi for closer match to screenshot icons
 import { FiCornerUpLeft, FiChevronDown, FiLoader } from 'react-icons/fi';
+import { motion, AnimatePresence } from 'framer-motion'; // Import animation
 
 // Define interfaces for the data structure
 interface Email {
@@ -182,26 +183,44 @@ const Disclosure: React.FC<DisclosureProps> = ({ title, children, headerStyle })
     const [isOpen, setIsOpen] = useState(false);
     const defaultHeaderStyle = "text-base font-bold text-gray-700 mb-3"; // Updated default weight
 
+    // Animation variants for content slide
+    const contentVariants = {
+        collapsed: { height: 0, opacity: 0, transition: { duration: 0.3, ease: "easeInOut" } },
+        open: { height: "auto", opacity: 1, transition: { duration: 0.3, ease: "easeInOut" } }
+    };
+
     return (
         <div>
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                // Apply passed style or default, adjust text size/weight
                 className={`flex justify-between items-center w-full text-left ${headerStyle || defaultHeaderStyle}`}
+                aria-expanded={isOpen}
             >
                 <span>{title}</span>
-                 {/* Use FiChevronDown, adjust size and color */}
-                <FiChevronDown
-                    size={20}
-                    className={`text-blue-500 transform transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`}
-                />
+                {/* Animate chevron rotation */}
+                <motion.div
+                     animate={{ rotate: isOpen ? 180 : 0 }}
+                     transition={{ duration: 0.3 }}
+                 >
+                    <FiChevronDown size={20} className={`text-blue-500`} />
+                 </motion.div>
             </button>
-            {isOpen && (
-                // Remove border and padding, rely on list styling
-                <div className="mt-1">
-                    {children}
-                </div>
-            )}
+            {/* Animate content visibility */}
+            <AnimatePresence initial={false}>
+                {isOpen && (
+                    <motion.div
+                        key="content"
+                        variants={contentVariants}
+                        initial="collapsed"
+                        animate="open"
+                        exit="collapsed"
+                        style={{ overflow: 'hidden' }} // Prevent content overflow during animation
+                        className="mt-1"
+                    >
+                        {children}
+                    </motion.div>
+                )}
+            </AnimatePresence>
         </div>
     );
 };
