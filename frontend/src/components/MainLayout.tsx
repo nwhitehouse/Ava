@@ -154,8 +154,12 @@ const MainLayout: React.FC = () => {
                     <FiChevronLeft />
                 </button>
                 <div className="flex items-center space-x-4">
-                    {/* Mail Icon - Link to /emails */}
-                    <Link to="/emails" className="text-gray-600 hover:text-blue-600 relative p-1">
+                    {/* Mail Icon - Link to /emails, also set view to chat */}
+                    <Link 
+                        to="/emails" 
+                        onClick={() => setCurrentView('chat')} // Reset view on click
+                        className="text-gray-600 hover:text-blue-600 relative p-1"
+                    >
                         <VscMail size={24} />
                         {showNotification && (
                             <span className="absolute top-0 right-0 block h-2 w-2 rounded-full ring-1 ring-white bg-red-500"></span>

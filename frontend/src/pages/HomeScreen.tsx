@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 // Using react-icons/fi for closer match to screenshot icons
-import { FiCornerUpLeft, FiChevronDown, FiLoader } from 'react-icons/fi';
+import { FiCornerUpLeft, FiChevronDown, FiLoader, FiRefreshCw } from 'react-icons/fi';
 import { motion, AnimatePresence } from 'framer-motion'; // Import animation
 
 // --- New Interfaces matching Backend --- //
@@ -33,30 +33,40 @@ const HomeScreen: React.FC = () => {
     const [loading, setLoading] = useState<boolean>(true);
     const [error, setError] = useState<string | null>(null);
 
-    useEffect(() => {
-        const fetchData = async () => {
-            setLoading(true);
-            setError(null);
-            try {
-                // Fetch from the new homescreen endpoint
-                const response = await fetch('http://localhost:3001/api/homescreen_emails');
-                if (!response.ok) {
-                    const errorText = await response.text(); // Get error details if available
-                    throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
-                }
-                // Expect data in the HomescreenData structure
-                const result: HomescreenData = await response.json();
-                setData(result);
-            } catch (err: any) {
-                console.error("Fetch error:", err);
-                setError(`Failed to fetch dashboard data: ${err.message}. Ensure backend is running and CORS is enabled.`);
-            } finally {
-                setLoading(false);
+    // Wrap fetch logic in useCallback to avoid recreating it on every render
+    const fetchData = useCallback(async (isManualRefresh = false) => {
+        // Show loader only on initial load or manual refresh
+        if (isManualRefresh || data === null) {
+             setLoading(true);
+        }
+        setError(null);
+        try {
+            const response = await fetch('http://localhost:3001/api/homescreen_emails');
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`HTTP error! status: ${response.status} - ${errorText}`);
             }
-        };
+            const result: HomescreenData = await response.json();
+            setData(result);
+        } catch (err: any) {
+            console.error("Fetch error:", err);
+            // Don't overwrite existing data with error if background refresh fails
+            if (data === null) { 
+                 setError(`Failed to fetch dashboard data: ${err.message}. Ensure backend is running and CORS is enabled.`);
+            }
+        } finally {
+            setLoading(false);
+        }
+    }, [data]); // Depend on `data` so we can avoid full loading state on background refresh
 
+    // Initial fetch
+    useEffect(() => {
         fetchData();
-    }, []);
+    }, [fetchData]); // Use fetchData as dependency
+
+    const handleRefresh = () => {
+        fetchData(true); // Pass true to indicate manual refresh
+    };
 
     const getGreeting = (): string => {
         const hour = new Date().getHours();
@@ -65,17 +75,16 @@ const HomeScreen: React.FC = () => {
         return "Good evening";
     };
 
-    if (loading) {
+    if (loading && !data) { // Only show full page loader on initial load
         return <div className="flex justify-center items-center h-64"><FiLoader className="animate-spin h-8 w-8 text-blue-600" /></div>;
     }
 
-    if (error) {
+    if (error && !data) { // Only show full page error if no data loaded initially
         return <div className="text-red-600 p-4 bg-red-50 border border-red-300 rounded">Error: {error}</div>;
     }
 
-    // Handle case where data might be null or missing categories (though backend defaults to empty lists)
-    if (!data || !data.urgent || !data.delegate || !data.waiting_on) {
-        return <div className="text-gray-500">No email data available or data is incomplete.</div>;
+    if (!data) { // Handle case where data is null after initial load attempt (should have error)
+        return <div className="text-gray-500">No email data available. Try refreshing.</div>;
     }
 
     const pluralize = (count: number, singular: string, plural: string): string => {
@@ -89,10 +98,25 @@ const HomeScreen: React.FC = () => {
 
     return (
         <div className="space-y-6 max-w-3xl mx-auto">
-            {/* Restore user name to greeting */}
-            <h1 className="text-4xl font-semibold text-gray-800">
-                {getGreeting()},<br />Nick. {/* Hardcoded for now */}
-            </h1>
+            {/* Header with Refresh Button */} 
+            <div className="flex justify-between items-center">
+                <h1 className="text-4xl font-semibold text-gray-800">
+                    {getGreeting()},<br />Nick. 
+                </h1>
+                <button
+                    onClick={handleRefresh}
+                    className={`p-2 rounded-full hover:bg-gray-100 text-gray-500 hover:text-gray-700 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-blue-400 transition-colors ${loading ? 'animate-spin' : ''}`}
+                    disabled={loading} // Disable while loading
+                    aria-label="Refresh homescreen data"
+                >
+                    <FiRefreshCw size={20} />
+                </button>
+            </div>
+            
+            {/* Display error inline if it happens during refresh */}
+            {error && data && (
+                <div className="text-red-600 p-3 bg-red-50 border border-red-200 rounded text-sm">Refresh Error: {error}</div>
+            )}
 
             {/* Urgent Emails - Cleaned up display */}
             <section>

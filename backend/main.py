@@ -205,34 +205,23 @@ async def email_rag_query(request: ChatRequest):
         print(f"Primary RAG answer text: {answer_text}")
         print(f"Primary RAG retrieved {len(retrieved_objects)} objects")
 
-        # --- Step 2: Build final references using heuristic check --- #
+        # --- Step 2: Build final references directly from ALL retrieved objects --- #
+        # Reverted: Removed heuristic check
         references_list: list[EmailRef] = []
-        answer_lower = answer_text.lower() # Lowercase answer for case-insensitive check
-        print(f"--- Applying Heuristic Reference Check on {len(retrieved_objects)} objects --- ")
+        print(f"--- Building references from all {len(retrieved_objects)} retrieved objects --- ")
         
         for obj in retrieved_objects:
             obj_id = str(obj.uuid)
             properties = obj.properties
-            subject = properties.get("subject", "")
-            sender = properties.get("sender", "")
+            subject = properties.get("subject", "No Subject")
+            # sender = properties.get("sender", "") # No longer needed for check
             
-            subject_lower = subject.lower()
-            sender_lower = sender.lower()
+            # subject_lower = subject.lower() # No longer needed for check
+            # sender_lower = sender.lower() # No longer needed for check
             
-            # Heuristic: Add reference if subject or sender is mentioned in the answer
-            added = False
-            if subject and subject_lower in answer_lower:
-                references_list.append(EmailRef(id=obj_id, subject=subject or "No Subject"))
-                print(f"[Reference Added - Subject Match] ID: {obj_id}, Subject: {subject}")
-                added = True
-            elif sender and sender_lower in answer_lower:
-                # Avoid adding duplicates if both subject and sender match
-                if not added:
-                    references_list.append(EmailRef(id=obj_id, subject=subject or "No Subject"))
-                    print(f"[Reference Added - Sender Match] ID: {obj_id}, Sender: {sender}")
-                    added = True
-            # else:
-                # print(f"[Reference Skipped] ID: {obj_id}, Subject: {subject}, Sender: {sender}") # Optional: log skipped refs
+            # Always add reference if object was retrieved
+            references_list.append(EmailRef(id=obj_id, subject=subject))
+            print(f"[Reference Added] ID: {obj_id}, Subject: {subject}")
 
         # Construct final response
         final_response = ChatRagResponse(
@@ -240,7 +229,7 @@ async def email_rag_query(request: ChatRequest):
             references=references_list
         )
         
-        print(f"Final structured response (with heuristic check): {final_response}")
+        print(f"Final structured response (linking all retrieved): {final_response}")
         return final_response 
         
     except Exception as e:
