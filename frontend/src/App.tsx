@@ -1,29 +1,34 @@
+import React, { lazy, Suspense } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import './index.css'; // Import Tailwind styles here
 
 // Import Layout
 import MainLayout from './components/MainLayout';
 
-// Import page components
-import HomeScreen from './pages/HomeScreen';
-import EmailViewScreen from './pages/EmailViewScreen';
-import SettingsScreen from './pages/SettingsScreen';
+// Lazy load pages for better initial load performance
+const HomeScreen = lazy(() => import('./pages/HomeScreen'));
+const EmailDetailScreen = lazy(() => import('./pages/EmailDetailScreen')); // Import new detail page
+const EmailListScreen = lazy(() => import('./pages/EmailListScreen')); // Import new list page
 
-function App() {
+const App: React.FC = () => {
   return (
-    // Routes are now nested within the MainLayout
-    <Routes>
-      <Route element={<MainLayout />}>
-        {/* Pages rendered inside MainLayout's <Outlet /> */}
-        <Route path="/" element={<HomeScreen />} />
-        <Route path="/email/:id" element={<EmailViewScreen />} />
-        <Route path="/settings" element={<SettingsScreen />} />
-        {/* Add other nested routes here */}
-      </Route>
-      {/* Add non-layout routes here (e.g., Login page) */}
-      {/* <Route path="/login" element={<LoginPage />} /> */}
-    </Routes>
+    <Suspense fallback={<div className="flex justify-center items-center h-screen">Loading...</div>}>
+      <Routes>
+        <Route path="/" element={<MainLayout />}>
+          {/* Define nested routes that will render inside MainLayout's <Outlet> */}
+          <Route index element={<HomeScreen />} />
+          {/* Add route for the email list page */}
+          <Route path="emails" element={<EmailListScreen />} />
+          {/* Add route for the email detail page with parameter */}
+          <Route path="email/:emailId" element={<EmailDetailScreen />} />
+          {/* You could add other routes here later */}
+          {/* Example: <Route path="settings" element={<SettingsScreen />} /> */}
+        </Route>
+        {/* Add non-layout routes here (e.g., Login page) */}
+        {/* <Route path="/login" element={<LoginPage />} /> */}
+      </Routes>
+    </Suspense>
   );
-}
+};
 
 export default App;

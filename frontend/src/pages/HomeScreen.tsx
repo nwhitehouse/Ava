@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion'; // Import animation
 
 // --- New Interfaces matching Backend --- //
 interface EmailInfo {
+    id: string;
     subject: string;
     sender: string;
     reasoning: string;
@@ -92,7 +93,7 @@ const HomeScreen: React.FC = () => {
                 {getGreeting()}.
             </h1>
 
-            {/* Urgent Emails - Updated structure */}
+            {/* Urgent Emails - Updated structure with Links */}
             <section>
                 <h2 className={sectionHeaderStyle}>
                     {data.urgent.length > 0
@@ -102,13 +103,16 @@ const HomeScreen: React.FC = () => {
                 </h2>
                 {data.urgent.length > 0 && (
                     <ul className={`space-y-1.5 ${bulletPointStyle}`}>
-                        {data.urgent.map((email, index) => (
-                            <li key={`urgent-${index}`} className={`${listItemStyle} flex items-start`}>
-                                <FiCornerUpLeft className="text-red-500 mr-2 mt-0.5 flex-shrink-0" size={14} />
-                                <div>
-                                    <span className="font-medium">{email.subject}</span> from <span className="font-medium">{email.sender}</span>
-                                    <p className="text-xs text-gray-500 pl-4">Reasoning: {email.reasoning}</p>
-                                </div>
+                        {data.urgent.map((email) => (
+                            // Use email.id for the key and link
+                            <li key={email.id} className={`${listItemStyle} hover:bg-gray-50 p-1 rounded`}>
+                                <Link to={`/email/${email.id}`} className="flex items-start">
+                                    <FiCornerUpLeft className="text-red-500 mr-2 mt-0.5 flex-shrink-0" size={14} />
+                                    <div>
+                                        <span className="font-medium text-gray-800 hover:underline">{email.subject}</span> from <span className="font-medium">{email.sender}</span>
+                                        <p className="text-xs text-gray-500 pl-4">Reasoning: {email.reasoning}</p>
+                                    </div>
+                                </Link>
                             </li>
                         ))}
                     </ul>
@@ -117,18 +121,20 @@ const HomeScreen: React.FC = () => {
 
             <hr className="border-gray-200" />
 
-            {/* Delegatable Emails - Updated structure */}
+            {/* Delegatable Emails - Updated structure with Links */}
             <section>
                  <Disclosure title={`${data.delegate.length} ${pluralize(data.delegate.length, 'email', 'emails')} identified that could potentially be delegated`} headerStyle={sectionHeaderStyle}>
                      {data.delegate.length > 0 ? (
                          <ul className={`space-y-1.5 ${bulletPointStyle} mt-2`}>
-                             {data.delegate.map((email, index) => (
-                                 <li key={`delegate-${index}`} className={`${listItemStyle} flex items-start`}>
-                                     <span className="mr-2 mt-0.5">•</span>
-                                     <div>
-                                         <span className="font-medium">{email.subject}</span> from <span className="font-medium">{email.sender}</span>
-                                         <p className="text-xs text-gray-500 pl-4">Reasoning: {email.reasoning}</p>
-                                     </div>
+                             {data.delegate.map((email) => (
+                                 <li key={email.id} className={`${listItemStyle} hover:bg-gray-50 p-1 rounded`}>
+                                     <Link to={`/email/${email.id}`} className="flex items-start">
+                                         <span className="mr-2 mt-0.5">•</span>
+                                         <div>
+                                             <span className="font-medium text-gray-800 hover:underline">{email.subject}</span> from <span className="font-medium">{email.sender}</span>
+                                             <p className="text-xs text-gray-500 pl-4">Reasoning: {email.reasoning}</p>
+                                         </div>
+                                     </Link>
                                  </li>
                              ))}
                          </ul>
@@ -140,18 +146,20 @@ const HomeScreen: React.FC = () => {
 
             <hr className="border-gray-200" />
 
-            {/* Waiting On Emails - New structure */}
+            {/* Waiting On Emails - Updated structure with Links */}
             <section>
                 <Disclosure title={`${data.waiting_on.length} ${pluralize(data.waiting_on.length, 'email', 'emails')} identified where you are waiting for a response`} headerStyle={sectionHeaderStyle}>
                      {data.waiting_on.length > 0 ? (
                          <ul className={`space-y-1.5 ${bulletPointStyle} mt-2`}>
-                             {data.waiting_on.map((email, index) => (
-                                 <li key={`waiting-${index}`} className={`${listItemStyle} flex items-start`}>
-                                    <span className="mr-2 mt-0.5">•</span>
-                                    <div>
-                                        <span className="font-medium">{email.subject}</span> from <span className="font-medium">{email.sender}</span>
-                                        <p className="text-xs text-gray-500 pl-4">Reasoning: {email.reasoning}</p>
-                                    </div>
+                             {data.waiting_on.map((email) => (
+                                 <li key={email.id} className={`${listItemStyle} hover:bg-gray-50 p-1 rounded`}>
+                                     <Link to={`/email/${email.id}`} className="flex items-start">
+                                         <span className="mr-2 mt-0.5">•</span>
+                                         <div>
+                                             <span className="font-medium text-gray-800 hover:underline">{email.subject}</span> from <span className="font-medium">{email.sender}</span>
+                                             <p className="text-xs text-gray-500 pl-4">Reasoning: {email.reasoning}</p>
+                                         </div>
+                                     </Link>
                                  </li>
                             ))}
                          </ul>

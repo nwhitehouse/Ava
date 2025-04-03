@@ -99,13 +99,13 @@ const MainLayout: React.FC = () => {
                     <FiChevronLeft />
                 </Link>
                 <div className="flex items-center space-x-4">
-                    {/* Mail Icon - adjusted color, added notification */}
-                    <button className="text-gray-600 hover:text-blue-600 relative">
+                    {/* Mail Icon - Link to /emails */}
+                    <Link to="/emails" className="text-gray-600 hover:text-blue-600 relative">
                         <VscMail size={24} />
                         {showNotification && (
                             <span className="absolute top-0 right-0 block h-2 w-2 rounded-full ring-1 ring-white bg-red-500"></span>
                         )}
-                    </button>
+                    </Link>
                     {/* Menu Icon - adjusted color */}
                     <button className="text-gray-600 hover:text-blue-600">
                         <VscMenu size={24} />
