@@ -13,7 +13,6 @@ import time # For caching
 from rag_emails import (
     rag_chain_global, 
     homescreen_chain_global, 
-    relevance_check_chain_global, # Import the new chain
     weaviate_client, 
     WEAVIATE_CLASS_NAME,
     HomescreenData,
@@ -69,7 +68,7 @@ async def lifespan(app: FastAPI):
     if not weaviate_client or not weaviate_client.is_connected():
         print("Weaviate client not connected on startup!")
         # Handle error appropriately - maybe prevent startup or log critical error
-    if not rag_chain_global or not homescreen_chain_global or not relevance_check_chain_global:
+    if not rag_chain_global or not homescreen_chain_global:
         print("RAG chains not initialized on startup!")
         # Handle error appropriately
     yield
@@ -94,11 +93,11 @@ app.add_middleware(
 def read_root():
     return {"message": "Welcome to the Ava Backend"}
 
-# --- RAG Email Chat Endpoint (Two-LLM Call for References) ---
+# --- RAG Email Chat Endpoint (Simpler - Link All Retrieved) ---
 @app.post("/api/email_rag", response_model=ChatRagResponse)
 async def email_rag_query(request: ChatRequest):
-    """Runs RAG to get answer, then checks relevance for references."""
-    if not rag_chain_global or not relevance_check_chain_global:
+    """Runs RAG to get answer and links all retrieved emails as references."""
+    if not rag_chain_global:
         raise HTTPException(status_code=503, detail="RAG service not available")
     query = request.message
     if not query:
@@ -113,40 +112,39 @@ async def email_rag_query(request: ChatRequest):
         
         answer_text = rag_result.get("answer_text", "")
         retrieved_objects = rag_result.get("retrieved_objects", [])
-        formatted_context = rag_result.get("formatted_context", "") # Get context for relevance check
+        # formatted_context = rag_result.get("formatted_context", "") # No longer needed here
         
         print(f"Primary RAG answer text: {answer_text}")
         print(f"Primary RAG retrieved {len(retrieved_objects)} objects")
 
-        # --- Step 2: Invoke Relevance Check Chain --- #
-        relevant_ids = []
-        if answer_text and formatted_context and retrieved_objects: # Only run if we have ingredients
-            try:
-                print("--- Invoking Relevance Check Chain --- ")
-                relevance_input = {"answer_text": answer_text, "formatted_context": formatted_context}
-                # Expects: {"ids": [...]} 
-                relevance_result = await asyncio.to_thread(relevance_check_chain_global.invoke, relevance_input)
-                relevant_ids = relevance_result.get('ids', [])
-                print(f"Relevance Check found IDs: {relevant_ids}")
-            except Exception as relevance_exc:
-                # Log error but don't fail the whole request, just return no references
-                print(f"[ERROR] Relevance check chain failed: {relevance_exc}")
-                relevant_ids = [] # Default to empty list on error
-        else:
-             print("Skipping relevance check (missing answer, context, or objects).")
-
-        # --- Step 3: Build final references based on relevance check --- #
+        # --- Step 2: Build final references using heuristic check --- #
         references_list: list[EmailRef] = []
-        object_map = {str(obj.uuid): obj for obj in retrieved_objects} # Map IDs to objects for easy lookup
+        answer_lower = answer_text.lower() # Lowercase answer for case-insensitive check
+        print(f"--- Applying Heuristic Reference Check on {len(retrieved_objects)} objects --- ")
         
-        for rel_id in relevant_ids:
-            if rel_id in object_map:
-                 obj = object_map[rel_id]
-                 subject = obj.properties.get("subject", "No Subject")
-                 references_list.append(EmailRef(id=rel_id, subject=subject))
-                 print(f"[Final Reference Added] ID: {rel_id}, Subject: {subject}")
-            else:
-                 print(f"[WARN] Relevant ID {rel_id} not found in originally retrieved objects.")
+        for obj in retrieved_objects:
+            obj_id = str(obj.uuid)
+            properties = obj.properties
+            subject = properties.get("subject", "")
+            sender = properties.get("sender", "")
+            
+            subject_lower = subject.lower()
+            sender_lower = sender.lower()
+            
+            # Heuristic: Add reference if subject or sender is mentioned in the answer
+            added = False
+            if subject and subject_lower in answer_lower:
+                references_list.append(EmailRef(id=obj_id, subject=subject or "No Subject"))
+                print(f"[Reference Added - Subject Match] ID: {obj_id}, Subject: {subject}")
+                added = True
+            elif sender and sender_lower in answer_lower:
+                # Avoid adding duplicates if both subject and sender match
+                if not added:
+                    references_list.append(EmailRef(id=obj_id, subject=subject or "No Subject"))
+                    print(f"[Reference Added - Sender Match] ID: {obj_id}, Sender: {sender}")
+                    added = True
+            # else:
+                # print(f"[Reference Skipped] ID: {obj_id}, Subject: {subject}, Sender: {sender}") # Optional: log skipped refs
 
         # Construct final response
         final_response = ChatRagResponse(
@@ -154,11 +152,11 @@ async def email_rag_query(request: ChatRequest):
             references=references_list
         )
         
-        print(f"Final structured response with relevance check: {final_response}")
+        print(f"Final structured response (with heuristic check): {final_response}")
         return final_response 
         
     except Exception as e:
-        print(f"Error invoking/processing RAG chains: {e}")
+        print(f"Error invoking/processing RAG chain: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing email query: {str(e)}")
 
 # --- Homescreen Email Categorization Endpoint ---
