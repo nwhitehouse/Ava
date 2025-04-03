@@ -6,10 +6,16 @@ import asyncio
 from contextlib import asynccontextmanager
 import weaviate.classes as wvc
 import json
+import time # For caching
 
 # Import the RAG chains and Weaviate client
 # Correctly import the global weaviate_client variable
-from rag_emails import rag_chain_global, homescreen_chain_global, weaviate_client, WEAVIATE_CLASS_NAME
+from rag_emails import rag_chain_global, homescreen_chain_global, weaviate_client, WEAVIATE_CLASS_NAME, HomescreenData # Import the Pydantic model for caching type hint
+
+# --- Caching Globals --- #
+homescreen_cache: HomescreenData | None = None
+last_cache_time: float = 0
+CACHE_DURATION_SECONDS: int = 300 # Cache for 5 minutes
 
 # Pydantic model for chat requests
 class ChatRequest(BaseModel):
@@ -91,27 +97,53 @@ async def email_rag_query(request: ChatRequest):
 # --- Homescreen Email Categorization Endpoint ---
 @app.get("/api/homescreen_emails")
 async def get_homescreen_emails():
-    """Runs predefined RAG query to categorize emails for the homescreen."""
+    """Runs predefined RAG query to categorize emails for the homescreen, with caching."""
+    global homescreen_cache, last_cache_time
+    
+    current_time = time.time()
+    # Check cache validity
+    if homescreen_cache and (current_time - last_cache_time < CACHE_DURATION_SECONDS):
+        print("--- Returning CACHED homescreen data --- ")
+        return homescreen_cache
+
+    # Cache is invalid or empty, proceed with fetching
+    print("--- Cache invalid or expired, fetching fresh homescreen data --- ")
     if not homescreen_chain_global:
         raise HTTPException(status_code=503, detail="Homescreen RAG service not available")
 
     try:
         print("Invoking homescreen categorization chain...")
-        result = await asyncio.to_thread(homescreen_chain_global.invoke, "Categorize emails for homescreen")
+        result_dict = await asyncio.to_thread(homescreen_chain_global.invoke, {})
         
         # --- DEBUG: Print the raw result from the chain --- #
-        print("--- Homescreen Chain RAW Result (before sending to frontend) ---")
-        try:
-            print(json.dumps(result, indent=2))
-        except TypeError:
-             print(result) # Fallback if not JSON serializable for some reason
-        print("--- End Homescreen Chain RAW Result ---")
+        print("--- Homescreen Chain RAW Result --- ")
+        try: print(json.dumps(result_dict, indent=2))
+        except TypeError: print(result_dict)
+        print("--- End Homescreen Chain RAW Result --- ")
         # --- END DEBUG --- #
         
-        # The result should already be the parsed Pydantic object (dict)
-        return result
+        # Validate and store in cache (using Pydantic model for structure)
+        try:
+             homescreen_cache = HomescreenData(**result_dict) # Validate and convert
+             last_cache_time = current_time
+             print("--- Homescreen data cached successfully --- ")
+        except Exception as pydantic_error:
+             print(f"[ERROR] Pydantic validation failed for homescreen data: {pydantic_error}")
+             # Optionally return stale cache if validation fails but cache exists
+             # if homescreen_cache:
+             #     print("[WARN] Returning stale cache due to validation error.")
+             #     return homescreen_cache
+             # Or raise error
+             raise HTTPException(status_code=500, detail="Failed to process homescreen data structure.")
+
+        return homescreen_cache # Return the newly cached & validated data
+        
     except Exception as e:
         print(f"Error invoking homescreen chain: {e}")
+        # Optionally return stale cache on error
+        # if homescreen_cache:
+        #     print("[WARN] Returning stale cache due to fetch error.")
+        #     return homescreen_cache
         raise HTTPException(status_code=500, detail=f"Error fetching homescreen email data: {str(e)}")
 
 # --- Get Single Email Details Endpoint ---

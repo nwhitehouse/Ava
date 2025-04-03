@@ -32,7 +32,8 @@ if not OPENAI_API_KEY:
 # --- Pydantic Models for Structured Output ---
 class EmailInfo(BaseModel):
     id: str = Field(description="The unique ID (UUID) of the email from the context")
-    subject: str = Field(description="The subject line of the email")
+    heading: str = Field(description="A very short (3-7 words) AI-generated heading summarizing the email's key point or action.")
+    subject: str = Field(description="The original subject line of the email")
     sender: str = Field(description="The sender of the email")
     reasoning: str = Field(description="Brief reason why this email fits the category")
 
@@ -140,21 +141,34 @@ def create_homescreen_chain_native(llm):
     parser = JsonOutputParser(pydantic_object=HomescreenData)
 
     prompt_template = """
-    You are an AI assistant...
+    You are an AI assistant tasked with categorizing emails based on provided context and generating short headings.
     Analyze the following emails, identified by their ID, sender, subject, and body.
-    Categorize them according to...
-    Provide your output *only* as a JSON object...
-    **IT IS ABSOLUTELY CRITICAL that for each email... include its correct 'id' (UUID). Copy the ID exactly...**
+    Categorize them according to these definitions:
+    - urgent: Emails that require *my* immediate attention or response soon.
+    - delegate: Emails tasks or information requests that someone else could potentially handle.
+    - waiting_on: Emails where I am waiting for a response or information from the sender or others mentioned.
+
+    Provide your output *only* as a JSON object matching the following schema.
+    For each email included:
+    1. Generate a concise 'heading' (3-7 words) summarizing the core point or action needed.
+    2. Include the original 'subject' and 'sender'.
+    3. Include the 'reasoning' for the categorization.
+    4. **IT IS ABSOLUTELY CRITICAL that you include its correct 'id' (UUID). Copy the ID exactly...**
     Schema:
     {format_instructions}
 
     Context:
     {context}
 
-    Based *only* on the context provided, identify...
-    If no emails fit a category... return an empty list...
+    Based *only* on the context provided, identify:
+    - Up to 5 urgent emails.
+    - Up to 3 delegate emails.
+    - Up to 3 waiting_on emails.
+
+    If no emails fit a category based on the context, return an empty list for that category.
+    Do not make assumptions beyond the email text.
     Output *only* the JSON object.
-    """ # (Using truncated prompt from previous step for brevity)
+    """
 
     prompt = ChatPromptTemplate.from_template(
         prompt_template,
@@ -164,9 +178,8 @@ def create_homescreen_chain_native(llm):
     homescreen_chain = (
         RunnableLambda(fetch_emails_native)
         | RunnableLambda(format_weaviate_objects_for_llm)
-        # Transform the formatted string output into a dict with the key 'context'
         | RunnableLambda(lambda formatted_string: {"context": formatted_string})
-        | prompt # Prompt now correctly receives {"context": ...}
+        | prompt
         | llm
         | parser
     )
