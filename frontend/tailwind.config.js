@@ -11,6 +11,9 @@ export default {
       fontFamily: {
         sans: ['Jura', ...defaultTheme.fontFamily.sans],
       },
+      colors: {
+        'user-message-bg': '#F3F4FC',
+      },
     },
   },
   plugins: [],

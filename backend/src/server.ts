@@ -6,6 +6,7 @@ import { AppDataSource } from './config/data-source'; // Import TypeORM data sou
 import weaviateClient from './config/weaviate-client'; // Import Weaviate client
 import userRoutes from './routes/user.routes'; // Import user routes
 import mockRoutes from './routes/mock.routes'; // Import mock routes
+import chatRoutes from './routes/chat.routes'; // Import chat routes
 
 dotenv.config(); // Load environment variables from .env file
 
@@ -40,6 +41,7 @@ async function initializeApp() {
     });
     app.use('/api/users', userRoutes); // Mount user routes
     app.use('/api/mock', mockRoutes); // Mount mock routes
+    app.use('/api/chat', chatRoutes); // Mount chat routes
     // Add other routes here
 
     // Start Server
